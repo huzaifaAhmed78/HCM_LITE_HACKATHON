@@ -1,0 +1,871 @@
+﻿
+===== D:\Hackathon\hcm-lite\backend\src\models\AuditLog.js =====
+import mongoose from 'mongoose'
+
+const auditLogSchema = new mongoose.Schema({
+  actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  actorRole: { type: String, default: 'system' },
+  action: { type: String, required: true }, // e.g. 'employee.create', 'payroll.finalize'
+  entity: { type: String, required: true },
+  entityId: { type: String, default: null },
+  before: { type: mongoose.Schema.Types.Mixed, default: null },
+  after: { type: mongoose.Schema.Types.Mixed, default: null },
+  at: { type: Date, default: Date.now, index: true },
+})
+
+// Append-only: nobody can change or delete audit entries.
+for (const op of ['updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'deleteOne', 'deleteMany', 'findOneAndDelete']) {
+  auditLogSchema.pre(op, () => {
+    throw new Error('Audit log is append-only')
+  })
+}
+
+export const AuditLog = mongoose.model('AuditLog', auditLogSchema)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\models\Department.js =====
+import mongoose from 'mongoose'
+
+const schema = new mongoose.Schema({ name: { type: String, required: true, trim: true } }, { timestamps: true })
+schema.index({ name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } }) // case-insensitive unique
+
+export const Department = mongoose.model('Department', schema)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\models\Designation.js =====
+import mongoose from 'mongoose'
+
+const schema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    departmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', default: null },
+  },
+  { timestamps: true }
+)
+schema.index({ name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } })
+
+export const Designation = mongoose.model('Designation', schema)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\models\Employee.js =====
+import mongoose from 'mongoose'
+
+const employeeSchema = new mongoose.Schema(
+  {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    employeeCode: { type: String, required: true, unique: true },
+    name: { type: String, required: true, trim: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    phone: { type: String, default: '', trim: true },
+    address: { type: String, default: '', trim: true },
+    departmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true },
+    designationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Designation', required: true },
+    joiningDate: { type: Date, default: Date.now },
+    status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+    basic: { type: Number, required: true, min: 0 },
+  },
+  { timestamps: true }
+)
+
+export const Employee = mongoose.model('Employee', employeeSchema)
+
+===== D:\Hackathon\hcm-lite\backend\src\models\Holiday.js =====
+import mongoose from 'mongoose'
+
+const schema = new mongoose.Schema(
+  {
+    date: { type: String, required: true, unique: true }, // YYYY-MM-DD
+    name: { type: String, required: true, trim: true },
+  },
+  { timestamps: true }
+)
+
+export const Holiday = mongoose.model('Holiday', schema)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\models\LeaveType.js =====
+import mongoose from 'mongoose'
+
+const schema = new mongoose.Schema(
+  {
+    key: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    name: { type: String, required: true, trim: true },
+    yearlyQuota: { type: Number, default: null }, // null = unlimited (unpaid leave)
+    paid: { type: Boolean, default: true },
+  },
+  { timestamps: true }
+)
+
+export const LeaveType = mongoose.model('LeaveType', schema)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\models\Settings.js =====
+import mongoose from 'mongoose'
+
+// Single document (key = 'main'). Defaults come from the brief.
+// Changing settings affects NEW records only.
+const settingsSchema = new mongoose.Schema(
+  {
+    key: { type: String, default: 'main', unique: true },
+    companyName: { type: String, required: true, trim: true },
+    timezone: { type: String, default: 'UTC' },
+    officeStart: { type: String, default: '09:00' },
+    graceMinutes: { type: Number, default: 15 },
+    halfDayHours: { type: Number, default: 5 },
+    weekend: { type: [Number], default: [0, 6] }, // 0 = Sunday ... 6 = Saturday
+    office: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      radiusM: { type: Number, default: 150 },
+    },
+  },
+  { timestamps: true }
+)
+
+export const Settings = mongoose.model('Settings', settingsSchema)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\models\User.js =====
+import mongoose from 'mongoose'
+
+const userSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    passwordHash: { type: String, required: true },
+    role: { type: String, enum: ['admin', 'hr', 'employee'], required: true },
+    employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
+    isActive: { type: Boolean, default: true },
+    mustChangePassword: { type: Boolean, default: false },
+    lastLoginAt: { type: Date, default: null },
+  },
+  { timestamps: true }
+)
+
+export const User = mongoose.model('User', userSchema)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\middleware\authenticate.js =====
+import jwt from 'jsonwebtoken'
+import { env } from '../config/env.js'
+import { User } from '../models/User.js'
+import { ApiError } from '../utils/ApiError.js'
+import { asyncHandler } from '../utils/asyncHandler.js'
+
+// Checks the token, then loads the user from the database on every request,
+// so deactivating a login takes effect immediately.
+// A user with a temporary password can only use routes marked allowPasswordChange.
+export const authenticate = ({ allowPasswordChange = false } = {}) =>
+  asyncHandler(async (req, res, next) => {
+    const [type, token] = (req.headers.authorization || '').split(' ')
+    if (type !== 'Bearer' || !token) throw new ApiError(401, 'Authentication required')
+
+    let payload
+    try {
+      payload = jwt.verify(token, env.jwtSecret)
+    } catch {
+      throw new ApiError(401, 'Invalid or expired token')
+    }
+
+    const user = await User.findById(payload.sub)
+    if (!user || !user.isActive) throw new ApiError(401, 'Account not found or deactivated')
+    if (user.mustChangePassword && !allowPasswordChange) {
+      throw new ApiError(403, 'You must change your temporary password first')
+    }
+
+    req.user = {
+      id: String(user._id),
+      role: user.role,
+      employeeId: user.employeeId ? String(user.employeeId) : null,
+      name: user.name,
+      email: user.email,
+    }
+    next()
+  })
+
+
+===== D:\Hackathon\hcm-lite\backend\src\middleware\errorHandler.js =====
+import { ApiError } from '../utils/ApiError.js'
+
+export function notFound(req, res, next) {
+  next(new ApiError(404, `Route not found: ${req.method} ${req.originalUrl}`))
+}
+
+// Every error leaves the API in the same shape: { success: false, message, errors }
+export function errorHandler(err, req, res, next) {
+  let status = 500
+  let message = 'Something went wrong on the server'
+  let errors = []
+
+  if (err instanceof ApiError) {
+    status = err.status
+    message = err.message
+    errors = err.errors
+  } else if (err.code === 11000) {
+    status = 409
+    const field = Object.keys(err.keyPattern || {})[0] || 'value'
+    message = `Duplicate ${field}`
+    errors = [{ field, message: `This ${field} already exists` }]
+  } else if (err.name === 'CastError') {
+    status = 400
+    message = 'Invalid id format'
+  } else {
+    console.error(err) // unexpected: log it, but never leak details to the client
+  }
+
+  res.status(status).json({ success: false, message, errors })
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\middleware\requireRole.js =====
+import { ApiError } from '../utils/ApiError.js'
+
+// Usage: router.post('/x', authenticate(), requireRole('admin', 'hr'), controller)
+export const requireRole = (...roles) => (req, res, next) => {
+  if (!roles.includes(req.user.role)) throw new ApiError(403, 'You do not have access to this resource')
+  next()
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\middleware\validate.js =====
+import { ApiError } from '../utils/ApiError.js'
+
+// validate(zodSchema, 'body' | 'query' | 'params'). Replaces the input with the cleaned data.
+export const validate = (schema, source = 'body') => (req, res, next) => {
+  const result = schema.safeParse(req[source])
+  if (!result.success) {
+    const errors = result.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message }))
+    throw new ApiError(422, 'Validation failed', errors)
+  }
+  req[source] = result.data
+  next()
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\services\auditService.js =====
+import { AuditLog } from '../models/AuditLog.js'
+
+// The ONLY place that writes audit entries. Call it after every important change.
+// actor = req.user (or null for system actions).
+export async function logAudit({ actor = null, action, entity, entityId = null, before = null, after = null }) {
+  await AuditLog.create({
+    actorId: actor?.id ?? null,
+    actorRole: actor?.role ?? 'system',
+    action,
+    entity,
+    entityId: entityId ? String(entityId) : null,
+    before,
+    after,
+  })
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\services\authService.js =====
+import bcrypt from 'bcryptjs'
+import jwt from 'jsonwebtoken'
+import { env } from '../config/env.js'
+import { User } from '../models/User.js'
+import { ApiError } from '../utils/ApiError.js'
+import { logAudit } from './auditService.js'
+
+export const hashPassword = (plain) => bcrypt.hash(plain, 10)
+
+export function signToken(user) {
+  return jwt.sign(
+    { role: user.role, employeeId: user.employeeId ? String(user.employeeId) : null },
+    env.jwtSecret,
+    { subject: String(user._id), expiresIn: env.jwtExpiresIn }
+  )
+}
+
+export async function login({ email, password }) {
+  const user = await User.findOne({ email })
+  const valid = user && user.isActive && (await bcrypt.compare(password, user.passwordHash))
+  if (!valid) throw new ApiError(401, 'Invalid email or password') // same message for every failure
+
+  user.lastLoginAt = new Date()
+  await user.save()
+  return { token: signToken(user), user }
+}
+
+export async function changePassword(userId, { currentPassword, newPassword }) {
+  const user = await User.findById(userId)
+  if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    throw new ApiError(422, 'Current password is incorrect', [{ field: 'currentPassword', message: 'Incorrect password' }])
+  }
+  if (currentPassword === newPassword) {
+    throw new ApiError(422, 'New password must be different', [{ field: 'newPassword', message: 'Use a new password' }])
+  }
+
+  user.passwordHash = await hashPassword(newPassword)
+  user.mustChangePassword = false
+  await user.save()
+
+  await logAudit({ actor: { id: user._id, role: user.role }, action: 'auth.change_password', entity: 'User', entityId: user._id })
+  return { token: signToken(user), user }
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\services\crudService.js =====
+import mongoose from 'mongoose'
+import { ApiError } from '../utils/ApiError.js'
+import { docView } from '../views/docView.js'
+import { logAudit } from './auditService.js'
+
+// Small shared CRUD for simple setup lists (departments, designations, leave types, holidays).
+// Every create / update / delete is written to the audit log with before and after.
+export function makeCrudService({ Model, entity, sort, checkRefs = async () => {} }) {
+  const find = async (id) => {
+    const doc = await Model.findById(id)
+    if (!doc) throw new ApiError(404, `${entity} not found`)
+    return doc
+  }
+
+  return {
+    list: () => Model.find().sort(sort),
+
+    async create(actor, data) {
+      await checkRefs(data)
+      const doc = await Model.create(data)
+      await logAudit({ actor, action: `${entity}.create`, entity, entityId: doc._id, after: docView(doc) })
+      return doc
+    },
+
+    async update(actor, id, data) {
+      const doc = await find(id)
+      await checkRefs(data)
+      const before = docView(doc)
+      doc.set(data)
+      await doc.save()
+      await logAudit({ actor, action: `${entity}.update`, entity, entityId: doc._id, before, after: docView(doc) })
+      return doc
+    },
+
+      async remove(actor, id) {
+      const doc = await find(id)
+      const field = { Department: 'departmentId', Designation: 'designationId' }[Model.modelName]
+      if (field && mongoose.models.Employee && (await mongoose.models.Employee.exists({ [field]: id })))
+        throw new ApiError(409, `${entity} is in use by employees and cannot be deleted`)
+      await doc.deleteOne()
+      await logAudit({ actor, action: `${entity}.delete`, entity, entityId: id, before: docView(doc) })
+    },
+  }
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\services\employeeService.js =====
+import mongoose from 'mongoose'
+import { Employee } from '../models/Employee.js'
+import { User } from '../models/User.js'
+import { ApiError } from '../utils/ApiError.js'
+import { generateTempPassword } from '../utils/tempPassword.js'
+import { employeeView } from '../views/employeeView.js'
+import { hashPassword } from './authService.js'
+import { logAudit } from './auditService.js'
+
+const populate = [
+  { path: 'departmentId', select: 'name' },
+  { path: 'designationId', select: 'name' },
+]
+
+async function assertRefs({ departmentId, designationId }) {
+  const errors = []
+  if (departmentId && !(await mongoose.model('Department').exists({ _id: departmentId })))
+    errors.push({ field: 'departmentId', message: 'Department not found' })
+  if (designationId && !(await mongoose.model('Designation').exists({ _id: designationId })))
+    errors.push({ field: 'designationId', message: 'Designation not found' })
+  if (errors.length) throw new ApiError(422, 'Validation failed', errors)
+}
+
+async function nextCode() {
+  const last = await Employee.findOne().sort({ createdAt: -1 }).select('employeeCode')
+  const n = last ? parseInt(last.employeeCode.slice(4), 10) + 1 : 1
+  return `EMP-${String(n).padStart(4, '0')}`
+}
+
+const findEmployee = async (id) => {
+  const emp = await Employee.findById(id).populate(populate)
+  if (!emp) throw new ApiError(404, 'Employee not found')
+  return emp
+}
+
+// HR registers an employee. Login is created with a temporary password, returned ONCE.
+export async function createEmployee(actor, input) {
+  const email = input.email.toLowerCase()
+  if (await User.exists({ email })) throw new ApiError(409, 'Duplicate email')
+  await assertRefs(input)
+
+  const temporaryPassword = generateTempPassword()
+  const _id = new mongoose.Types.ObjectId()
+  const user = await User.create({
+    name: input.name,
+    email,
+    passwordHash: await hashPassword(temporaryPassword),
+    role: 'employee',
+    employeeId: _id,
+    mustChangePassword: true,
+  })
+
+  let emp
+  try {
+    emp = await Employee.create({
+      _id,
+      userId: user._id,
+      employeeCode: await nextCode(),
+      name: input.name,
+      email,
+      phone: input.phone,
+      address: input.address,
+      departmentId: input.departmentId,
+      designationId: input.designationId,
+      joiningDate: input.joiningDate,
+      basic: input.basic,
+    })
+  } catch (err) {
+    await user.deleteOne() // do not leave a login without an employee
+    throw err
+  }
+
+  emp = await emp.populate(populate)
+  await logAudit({ actor, action: 'employee.create', entity: 'Employee', entityId: emp._id, after: employeeView(emp) })
+  return { employee: employeeView(emp), temporaryPassword }
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+export async function listEmployees({ q, departmentId, designationId, status, page, limit }) {
+  const p = Math.max(1, Number(page) || 1)
+  const l = Math.min(50, Math.max(1, Number(limit) || 10))
+  const filter = {}
+  if (departmentId) filter.departmentId = departmentId
+  if (designationId) filter.designationId = designationId
+  if (status) filter.status = status
+  if (q) {
+    const re = new RegExp(escapeRe(String(q)), 'i')
+    filter.$or = [{ name: re }, { email: re }, { employeeCode: re }]
+  }
+  const [items, total] = await Promise.all([
+    Employee.find(filter).populate(populate).sort({ createdAt: -1 }).skip((p - 1) * l).limit(l),
+    Employee.countDocuments(filter),
+  ])
+  return { items: items.map(employeeView), total, page: p, pages: Math.ceil(total / l) }
+}
+
+// Employee 360: attendance, leave and payslips get added here in later modules
+export async function getEmployee360(id) {
+  return employeeView(await findEmployee(id))
+}
+
+export async function updateEmployee(actor, id, patch) {
+  const emp = await findEmployee(id)
+  await assertRefs(patch)
+  const before = employeeView(emp)
+  emp.set(patch)
+  await emp.save()
+  const userPatch = {}
+  if (patch.status) userPatch.isActive = patch.status === 'active'
+  if (patch.name) userPatch.name = patch.name
+  if (Object.keys(userPatch).length) await User.findByIdAndUpdate(emp.userId, userPatch)
+  const fresh = await findEmployee(id)
+  await logAudit({ actor, action: 'employee.update', entity: 'Employee', entityId: emp._id, before, after: employeeView(fresh) })
+  return employeeView(fresh)
+}
+
+export async function getMe(actor) {
+  const emp = await Employee.findOne({ userId: actor.id }).populate(populate)
+  if (!emp) throw new ApiError(404, 'Employee profile not found')
+  return employeeView(emp)
+}
+
+export async function updateMe(actor, patch) {
+  const emp = await Employee.findOne({ userId: actor.id }).populate(populate)
+  if (!emp) throw new ApiError(404, 'Employee profile not found')
+  const before = employeeView(emp)
+  emp.set(patch)
+  await emp.save()
+  await logAudit({ actor, action: 'employee.update_self', entity: 'Employee', entityId: emp._id, before, after: employeeView(emp) })
+  return employeeView(emp)
+}
+
+===== D:\Hackathon\hcm-lite\backend\src\services\orgService.js =====
+import { Department } from '../models/Department.js'
+import { Designation } from '../models/Designation.js'
+import { LeaveType } from '../models/LeaveType.js'
+import { Holiday } from '../models/Holiday.js'
+import { ApiError } from '../utils/ApiError.js'
+import { makeCrudService } from './crudService.js'
+
+export const departmentService = makeCrudService({ Model: Department, entity: 'Department', sort: { name: 1 } })
+
+export const designationService = makeCrudService({
+  Model: Designation,
+  entity: 'Designation',
+  sort: { name: 1 },
+  checkRefs: async (data) => {
+    if (data.departmentId && !(await Department.exists({ _id: data.departmentId }))) {
+      throw new ApiError(422, 'Department not found', [{ field: 'departmentId', message: 'Unknown department' }])
+    }
+  },
+})
+
+export const leaveTypeService = makeCrudService({ Model: LeaveType, entity: 'LeaveType', sort: { name: 1 } })
+export const holidayService = makeCrudService({ Model: Holiday, entity: 'Holiday', sort: { date: 1 } })
+
+// Policy defaults from the brief. Admin can edit the quotas. Created once at first-run.
+const DEFAULT_LEAVE_TYPES = [
+  { key: 'annual', name: 'Annual', yearlyQuota: 14, paid: true },
+  { key: 'sick', name: 'Sick', yearlyQuota: 8, paid: true },
+  { key: 'casual', name: 'Casual', yearlyQuota: 10, paid: true },
+  { key: 'unpaid', name: 'Unpaid', yearlyQuota: null, paid: false },
+]
+
+export async function seedDefaultLeaveTypes() {
+  await LeaveType.bulkWrite(
+    DEFAULT_LEAVE_TYPES.map((t) => ({ updateOne: { filter: { key: t.key }, update: { $setOnInsert: t }, upsert: true } }))
+  )
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\services\settingsService.js =====
+import { Settings } from '../models/Settings.js'
+import { ApiError } from '../utils/ApiError.js'
+import { docView } from '../views/docView.js'
+import { logAudit } from './auditService.js'
+
+async function load() {
+  const settings = await Settings.findOne({ key: 'main' })
+  if (!settings) throw new ApiError(404, 'Company is not set up yet')
+  return settings
+}
+
+export const getSettings = load
+
+// Partial update. Changes apply to NEW records only (old attendance is never recalculated).
+export async function updateSettings(actor, input) {
+  const settings = await load()
+  const before = docView(settings)
+
+  for (const [field, value] of Object.entries(input)) {
+    if (field === 'office') for (const [k, v] of Object.entries(value)) settings.set(`office.${k}`, v)
+    else settings.set(field, value)
+  }
+  await settings.save()
+
+  await logAudit({ actor, action: 'settings.update', entity: 'Settings', entityId: settings._id, before, after: docView(settings) })
+  return settings
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\services\setupService.js =====
+import { env } from '../config/env.js'
+import { User } from '../models/User.js'
+import { Settings } from '../models/Settings.js'
+import { ApiError } from '../utils/ApiError.js'
+import { hashPassword, signToken } from './authService.js'
+import { logAudit } from './auditService.js'
+import { seedDefaultLeaveTypes } from './orgService.js'
+
+export async function getSetupStatus() {
+  return { setupCompleted: Boolean(await User.exists({ role: 'admin' })) }
+}
+
+async function createCompanyAndAdmin({ companyName, timezone, adminName, email, password }) {
+  await Settings.findOneAndUpdate({ key: 'main' }, { $setOnInsert: { companyName, timezone } }, { upsert: true })
+
+  await seedDefaultLeaveTypes()
+
+  const admin = await User.create({
+    name: adminName,
+    email,
+    passwordHash: await hashPassword(password),
+    role: 'admin',
+  })
+
+  await logAudit({ actor: { id: admin._id, role: 'admin' }, action: 'setup.first_run', entity: 'Settings', after: { companyName, timezone } })
+  return admin
+}
+
+// Called by POST /setup/first-run. Works only while no Admin exists.
+export async function firstRun(input) {
+  if ((await getSetupStatus()).setupCompleted) throw new ApiError(409, 'Setup is already completed')
+  const admin = await createCompanyAndAdmin(input)
+  return { token: signToken(admin), user: admin }
+}
+
+// Called at server start. If ADMIN_EMAIL and ADMIN_PASSWORD are set and no Admin exists, create one.
+export async function ensureAdminFromEnv() {
+  if (!env.adminEmail || !env.adminPassword) return
+  if ((await getSetupStatus()).setupCompleted) return
+
+  await createCompanyAndAdmin({
+    companyName: env.companyName,
+    timezone: env.defaultTimezone,
+    adminName: 'Admin',
+    email: env.adminEmail.toLowerCase(),
+    password: env.adminPassword,
+  })
+  console.log(`Admin created from env: ${env.adminEmail}`)
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\services\userService.js =====
+import { User } from '../models/User.js'
+import { ApiError } from '../utils/ApiError.js'
+import { generateTempPassword } from '../utils/tempPassword.js'
+import { userView } from '../views/userView.js'
+import { hashPassword } from './authService.js'
+import { logAudit } from './auditService.js'
+
+export const listUsers = ({ role }) => User.find(role ? { role } : {}).sort({ createdAt: -1 }).limit(200)
+
+async function findUser(id) {
+  const user = await User.findById(id)
+  if (!user) throw new ApiError(404, 'User not found')
+  return user
+}
+
+// Admin creates an HR login. The temporary password is returned ONCE and never stored or logged in plain text.
+export async function createHr(actor, { name, email }) {
+  const temporaryPassword = generateTempPassword()
+  const user = await User.create({
+    name,
+    email,
+    passwordHash: await hashPassword(temporaryPassword),
+    role: 'hr',
+    mustChangePassword: true,
+  })
+  await logAudit({ actor, action: 'user.create_hr', entity: 'User', entityId: user._id, after: userView(user) })
+  return { user, temporaryPassword }
+}
+
+export async function setActive(actor, id, isActive) {
+  if (id === actor.id) throw new ApiError(422, 'You cannot change your own login')
+  const user = await findUser(id)
+  const before = userView(user)
+  user.isActive = isActive
+  await user.save()
+  await logAudit({ actor, action: isActive ? 'user.activate' : 'user.deactivate', entity: 'User', entityId: user._id, before, after: userView(user) })
+  return user
+}
+
+export async function resetPassword(actor, id) {
+  if (id === actor.id) throw new ApiError(422, 'Use Change Password for your own login')
+  const user = await findUser(id)
+  const temporaryPassword = generateTempPassword()
+  user.passwordHash = await hashPassword(temporaryPassword)
+  user.mustChangePassword = true
+  await user.save()
+  await logAudit({ actor, action: 'user.reset_password', entity: 'User', entityId: user._id })
+  return { user, temporaryPassword }
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\utils\ApiError.js =====
+// Throw this from services. The error handler turns it into the standard JSON error.
+export class ApiError extends Error {
+  constructor(status, message, errors = []) {
+    super(message)
+    this.status = status
+    this.errors = errors // [{ field, message }]
+  }
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\utils\apiResponse.js =====
+export function sendSuccess(res, { data = null, message = 'OK', status = 200 } = {}) {
+  return res.status(status).json({ success: true, data, message })
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\utils\asyncHandler.js =====
+// Lets controllers use async/await without try/catch. Errors go to errorHandler.
+export const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\utils\scope.js =====
+// ONE place that decides what rows a user may read.
+// Admin and HR see everything. An Employee only sees rows with their own employeeId.
+export function scopeFor(user) {
+  return user.role === 'employee' ? { employeeId: user.employeeId } : {}
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\utils\tempPassword.js =====
+import { randomBytes, randomInt } from 'node:crypto'
+
+// Example: "a3f9c01bA42". Has lowercase, uppercase and digits. Shown once, then must be changed.
+export function generateTempPassword() {
+  return `${randomBytes(4).toString('hex')}A${randomInt(10, 100)}`
+}
+
+
+===== D:\Hackathon\hcm-lite\backend\src\routes\authRoutes.js =====
+import { Router } from 'express'
+import rateLimit from 'express-rate-limit'
+import * as controller from '../controllers/authController.js'
+import { authenticate } from '../middleware/authenticate.js'
+import { validate } from '../middleware/validate.js'
+import { loginSchema, changePasswordSchema } from '../validators/authValidators.js'
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many login attempts. Try again later.', errors: [] },
+})
+
+const router = Router()
+router.post('/login', loginLimiter, validate(loginSchema), controller.login)
+router.post('/change-password', authenticate({ allowPasswordChange: true }), validate(changePasswordSchema), controller.changePassword)
+router.get('/me', authenticate({ allowPasswordChange: true }), controller.me)
+
+export default router
+
+
+===== D:\Hackathon\hcm-lite\backend\src\routes\employeeRoutes.js =====
+import { Router } from 'express'
+import * as controller from '../controllers/employeeController.js'
+import { authenticate } from '../middleware/authenticate.js'
+import { requireRole } from '../middleware/requireRole.js'
+import { validate } from '../middleware/validate.js'
+import { idParams } from '../validators/common.js'
+import { createEmployee, updateEmployee, updateMe } from '../validators/employeeValidators.js'
+
+const router = Router()
+router.use(authenticate())
+
+// Employee: own profile (must be before /:id)
+router.get('/me', requireRole('employee'), controller.me)
+router.patch('/me', requireRole('employee'), validate(updateMe), controller.updateMe)
+
+// HR manages, Admin can view
+router.post('/', requireRole('hr'), validate(createEmployee), controller.create)
+router.get('/', requireRole('hr', 'admin'), controller.list)
+router.get('/:id', requireRole('hr', 'admin'), validate(idParams, 'params'), controller.get)
+router.patch('/:id', requireRole('hr'), validate(idParams, 'params'), validate(updateEmployee), controller.update)
+
+export default router
+
+===== D:\Hackathon\hcm-lite\backend\src\routes\index.js =====
+import { Router } from 'express'
+import authRoutes from './authRoutes.js'
+import setupRoutes from './setupRoutes.js'
+import settingsRoutes from './settingsRoutes.js'
+import userRoutes from './userRoutes.js'
+import { departmentRoutes, designationRoutes, leaveTypeRoutes, holidayRoutes } from './orgRoutes.js'
+import employeeRoutes from './employeeRoutes.js'
+
+// Each new module adds one line here.
+const router = Router()
+router.use('/auth', authRoutes)
+router.use('/setup', setupRoutes)
+router.use('/settings', settingsRoutes)
+router.use('/users', userRoutes)
+router.use('/departments', departmentRoutes)
+router.use('/designations', designationRoutes)
+router.use('/leave-types', leaveTypeRoutes)
+router.use('/holidays', holidayRoutes)
+router.use('/employees', employeeRoutes)
+
+export default router
+
+
+===== D:\Hackathon\hcm-lite\backend\src\routes\orgRoutes.js =====
+import { Router } from 'express'
+import { authenticate } from '../middleware/authenticate.js'
+import { requireRole } from '../middleware/requireRole.js'
+import { validate } from '../middleware/validate.js'
+import { makeCrudController } from '../controllers/crudController.js'
+import { departmentService, designationService, leaveTypeService, holidayService } from '../services/orgService.js'
+import { idParams } from '../validators/common.js'
+import * as v from '../validators/orgValidators.js'
+
+// Admin and HR can read. Only Admin can change.
+function crudRouter(service, label, createSchema, updateSchema) {
+  const c = makeCrudController(service, label)
+  const router = Router()
+  router.use(authenticate())
+  router.get('/', requireRole('admin', 'hr'), c.list)
+  router.post('/', requireRole('admin'), validate(createSchema), c.create)
+  router.put('/:id', requireRole('admin'), validate(idParams, 'params'), validate(updateSchema), c.update)
+  router.delete('/:id', requireRole('admin'), validate(idParams, 'params'), c.remove)
+  return router
+}
+
+export const departmentRoutes = crudRouter(departmentService, 'Department', v.departmentCreate, v.departmentUpdate)
+export const designationRoutes = crudRouter(designationService, 'Designation', v.designationCreate, v.designationUpdate)
+export const leaveTypeRoutes = crudRouter(leaveTypeService, 'Leave type', v.leaveTypeCreate, v.leaveTypeUpdate)
+export const holidayRoutes = crudRouter(holidayService, 'Holiday', v.holidayCreate, v.holidayUpdate)
+
+
+===== D:\Hackathon\hcm-lite\backend\src\routes\settingsRoutes.js =====
+import { Router } from 'express'
+import * as controller from '../controllers/settingsController.js'
+import { authenticate } from '../middleware/authenticate.js'
+import { requireRole } from '../middleware/requireRole.js'
+import { validate } from '../middleware/validate.js'
+import { settingsUpdate } from '../validators/orgValidators.js'
+
+const router = Router()
+router.use(authenticate())
+router.get('/', requireRole('admin', 'hr'), controller.get)
+router.put('/', requireRole('admin'), validate(settingsUpdate), controller.update)
+
+export default router
+
+
+===== D:\Hackathon\hcm-lite\backend\src\routes\setupRoutes.js =====
+import { Router } from 'express'
+import * as controller from '../controllers/setupController.js'
+import { validate } from '../middleware/validate.js'
+import { firstRunSchema } from '../validators/authValidators.js'
+
+const router = Router()
+router.get('/status', controller.status)
+router.post('/first-run', validate(firstRunSchema), controller.firstRun)
+
+export default router
+
+
+===== D:\Hackathon\hcm-lite\backend\src\routes\userRoutes.js =====
+import { Router } from 'express'
+import * as controller from '../controllers/userController.js'
+import { authenticate } from '../middleware/authenticate.js'
+import { requireRole } from '../middleware/requireRole.js'
+import { validate } from '../middleware/validate.js'
+import { idParams } from '../validators/common.js'
+import { createHr, listUsersQuery } from '../validators/orgValidators.js'
+
+// Admin only
+const router = Router()
+router.use(authenticate(), requireRole('admin'))
+router.get('/', validate(listUsersQuery, 'query'), controller.list)
+router.post('/hr', validate(createHr), controller.createHr)
+router.patch('/:id/deactivate', validate(idParams, 'params'), controller.deactivate)
+router.patch('/:id/activate', validate(idParams, 'params'), controller.activate)
+router.post('/:id/reset-password', validate(idParams, 'params'), controller.resetPassword)
+
+export default router
+
+import express from 'express'
+import helmet from 'helmet'
+import cors from 'cors'
+import { env } from './config/env.js'
+import routes from './routes/index.js'
+import { notFound, errorHandler } from './middleware/errorHandler.js'
+
+const app = express()
+
+app.use(helmet())
+app.use(cors({ origin: env.corsOrigin }))
+app.use(express.json({ limit: '100kb' }))
+
+app.get('/health', (req, res) => res.json({ status: 'ok' })) // used by the keep-alive ping
+app.use('/api/v1', routes)
+
+app.use(notFound)
+app.use(errorHandler)
+
+export default app
+

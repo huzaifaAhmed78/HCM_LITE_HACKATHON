@@ -14,4 +14,8 @@ export const env = {
   adminPassword: process.env.ADMIN_PASSWORD,
   companyName: process.env.COMPANY_NAME || 'My Company',
   defaultTimezone: process.env.DEFAULT_TIMEZONE || 'UTC',
+  aiBaseUrl: (process.env.AI_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/$/, ''),
+  aiModel: process.env.AI_MODEL || 'openai/gpt-oss-120b',
+  aiApiKey: process.env.AI_API_KEY || '',
+  aiRateLimit: Number(process.env.AI_RATE_LIMIT_PER_HOUR) || 20,
 }

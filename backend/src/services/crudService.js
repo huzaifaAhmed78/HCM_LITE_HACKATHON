@@ -5,6 +5,21 @@ import { logAudit } from './auditService.js'
 
 // Small shared CRUD for simple setup lists (departments, designations, leave types, holidays).
 // Every create / update / delete is written to the audit log with before and after.
+// Things that must not be deleted while other records still use them.
+const IN_USE = {
+  Department: { model: 'Employee', field: 'departmentId', value: (d) => d._id, usedBy: 'employees' },
+  Designation: { model: 'Employee', field: 'designationId', value: (d) => d._id, usedBy: 'employees' },
+  LeaveType: { model: 'LeaveRequest', field: 'leaveTypeKey', value: (d) => d.key, usedBy: 'leave requests' },
+}
+
+async function ensureNotInUse(modelName, entity, doc) {
+  const rule = IN_USE[modelName]
+  const Other = rule && mongoose.models[rule.model]
+  if (Other && (await Other.exists({ [rule.field]: rule.value(doc) }))) {
+    throw new ApiError(409, `${entity} is used by ${rule.usedBy} and cannot be deleted`)
+  }
+}
+
 export function makeCrudService({ Model, entity, sort, checkRefs = async () => {} }) {
   const find = async (id) => {
     const doc = await Model.findById(id)
@@ -32,11 +47,9 @@ export function makeCrudService({ Model, entity, sort, checkRefs = async () => {
       return doc
     },
 
-      async remove(actor, id) {
+    async remove(actor, id) {
       const doc = await find(id)
-      const field = { Department: 'departmentId', Designation: 'designationId' }[Model.modelName]
-      if (field && mongoose.models.Employee && (await mongoose.models.Employee.exists({ [field]: id })))
-        throw new ApiError(409, `${entity} is in use by employees and cannot be deleted`)
+      await ensureNotInUse(Model.modelName, entity, doc)
       await doc.deleteOne()
       await logAudit({ actor, action: `${entity}.delete`, entity, entityId: id, before: docView(doc) })
     },

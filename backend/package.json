@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "ai:check": "node scripts/ai-check.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

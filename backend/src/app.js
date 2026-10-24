@@ -8,7 +8,7 @@ import { notFound, errorHandler } from './middleware/errorHandler.js'
 const app = express()
 
 app.use(helmet())
-app.use(cors({ origin: env.corsOrigin }))
+app.use(cors({ origin: env.corsOrigin.split(',').map((o) => o.trim()) })) // comma separated list is allowed
 app.use(express.json({ limit: '100kb' }))
 
 app.get('/health', (req, res) => res.json({ status: 'ok' })) // used by the keep-alive ping

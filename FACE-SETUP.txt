@@ -1,0 +1,9 @@
+Face attendance setup (run once, in the frontend folder):
+
+  cd D:\Hackathon\hcm-lite\frontend
+  npm install @vladmandic/face-api
+  New-Item -ItemType Directory -Force public\models | Out-Null
+  Copy-Item node_modules\@vladmandic\face-api\model\* public\models -Recurse -Force
+  npm run dev
+
+Then open http://localhost:5173 (camera works on localhost and on https only).
