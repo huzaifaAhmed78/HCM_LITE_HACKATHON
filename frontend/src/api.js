@@ -1,4 +1,4 @@
-// All backend calls go through api(). Backend shape: { success, data, message, errors: [{ field, message }] }
+﻿// All backend calls go through api(). Backend shape: { success, data, message, errors: [{ field, message }] }
 const BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://hcm-lite-hackathon-five.vercel.app/api/v1' : '/api/v1')
 let token = localStorage.getItem('token')
 
