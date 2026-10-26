@@ -35,21 +35,35 @@ function AnimatedValue({ value }) {
   return <>{m ? m[1] : ''}{text}{m ? m[3] : ''}</>
 }
 
-export const Kpi = ({ label, value, hint, tone, featured }) => (
-  <div
-    className={cx(
-      'relative overflow-hidden rounded-2xl border p-5 shadow-card transition duration-200 hover:-translate-y-0.5 hover:shadow-lift',
-      featured ? 'border-pine-dark bg-gradient-to-br from-pine-dark to-pine text-white' : 'border-sand bg-white'
-    )}
-  >
-    {featured && <i className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-white/10" aria-hidden="true" />}
-    <div className={cx('text-sm', featured ? 'text-white/80' : 'text-ink/60')}>{label}</div>
-    <div className={cx('mt-3 font-display text-3xl font-bold tabular-nums', !featured && tone)}>
-      <AnimatedValue value={value} />
+// The number shrinks to fit the card: font size = card width / (characters x 0.8), never bigger than 1.875rem.
+// "cqw" is 1% of the card's own width, so long values like "Rs 11,334,587" no longer spill out of the box.
+export function Kpi({ label, value, hint, tone, featured }) {
+  const chars = Math.max(String(value ?? '-').length, 1)
+  return (
+    <div
+      style={{ containerType: 'inline-size' }}
+      className={cx(
+        'relative overflow-hidden rounded-2xl border p-5 shadow-card transition duration-200 hover:-translate-y-0.5 hover:shadow-lift',
+        featured ? 'border-pine-dark bg-gradient-to-br from-pine-dark to-pine text-white' : 'border-sand bg-white'
+      )}
+    >
+      {featured && <i className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-white/10" aria-hidden="true" />}
+      <div className={cx('text-sm', featured ? 'text-white/80' : 'text-ink/60')}>{label}</div>
+      <div
+        className={cx('mt-3 whitespace-nowrap font-display font-bold tabular-nums', !featured && tone)}
+        style={{
+  fontSize: '18px',
+  lineHeight: 1,
+  whiteSpace: 'normal',
+  overflowWrap: 'anywhere',
+}}
+      >
+        <AnimatedValue value={value} />
+      </div>
+      {hint && <div className={cx('mt-1.5 text-xs', featured ? 'text-white/70' : 'text-ink/50')}>{hint}</div>}
     </div>
-    {hint && <div className={cx('mt-1.5 text-xs', featured ? 'text-white/70' : 'text-ink/50')}>{hint}</div>}
-  </div>
-)
+  )
+}
 
 // The first card in each row is the dark teal one.
 export const Kpis = ({ children }) => (

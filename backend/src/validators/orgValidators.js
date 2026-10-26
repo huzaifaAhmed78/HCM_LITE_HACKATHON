@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { objectId, isoDate, hhmm, timezone } from './common.js'
+import { objectId, isoDate, hhmm, timezone, newEmail } from './common.js'
 
 const name = z.string().trim().min(2, 'Name is required').max(80)
 
@@ -36,7 +36,8 @@ export const settingsUpdate = z.object({
 
 export const createHr = z.object({
   name: z.string().trim().min(2).max(100),
-  email: z.string().trim().toLowerCase().email('Enter a valid email'),
+  email: newEmail,
 }).strict()
 
 export const listUsersQuery = z.object({ role: z.enum(['admin', 'hr', 'employee']).optional() }).strict()
+

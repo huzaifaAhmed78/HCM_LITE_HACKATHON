@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { timezone } from './common.js'
+import { timezone, newEmail } from './common.js'
 
 const password = z.string().min(8, 'Password must be at least 8 characters').max(72)
 
@@ -17,6 +17,7 @@ export const firstRunSchema = z.object({
   companyName: z.string().trim().min(2, 'Company name is required').max(100),
   timezone: timezone.optional(),
   adminName: z.string().trim().min(2, 'Admin name is required').max(100),
-  email: z.string().trim().toLowerCase().email('Enter a valid email'),
+  email: newEmail,
   password,
 }).strict()
+

@@ -1,11 +1,12 @@
 import { z } from 'zod'
+import { newEmail } from './common.js'
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid id')
 const phone = z.string().trim().min(5).max(20)
 
 export const createEmployee = z.object({
   name: z.string().trim().min(2).max(100),
-  email: z.string().trim().toLowerCase().email(),
+  email: newEmail,
   phone: phone.optional(),
   address: z.string().trim().max(300).optional(),
   departmentId: objectId,
