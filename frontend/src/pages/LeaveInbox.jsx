@@ -27,11 +27,11 @@ export default function LeaveInbox() {
         <Err error={error || err} />
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead><tr className="text-left text-xs text-gray-500"><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th><th /></tr></thead>
+            <thead><tr className="text-left text-xs text-ink/60"><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th><th /></tr></thead>
             <tbody>
               {(data || []).map((r) => (
                 <tr key={r._id} className="border-t border-sand">
-                  <td className="py-1.5">{r.employeeId?.name} <span className="text-xs text-gray-400">{r.employeeId?.employeeCode}</span></td>
+                  <td className="py-1.5">{r.employeeId?.name} <span className="text-xs text-ink/50">{r.employeeId?.employeeCode}</span></td>
                   <td className="capitalize">{r.leaveTypeKey}</td><td>{r.startDate}</td><td>{r.endDate}</td><td>{r.days}</td><td>{r.reason}</td>
                   <td className="whitespace-nowrap text-right">
                     {r.status === 'pending' && user.role === 'hr' ? (
@@ -40,7 +40,7 @@ export default function LeaveInbox() {
                   </td>
                 </tr>
               ))}
-              {data?.length === 0 && <tr><td colSpan="7" className="py-3 text-gray-400">Nothing here</td></tr>}
+              {data?.length === 0 && <tr><td colSpan="7" className="py-3 text-ink/50">Nothing here</td></tr>}
             </tbody>
           </table>
         </div>
@@ -48,3 +48,4 @@ export default function LeaveInbox() {
     </div>
   )
 }
+

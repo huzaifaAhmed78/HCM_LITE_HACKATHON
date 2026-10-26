@@ -44,13 +44,13 @@ export default function AiChat({ role }) {
   return (
     <div className="fixed inset-x-3 bottom-3 z-40 flex max-h-[80vh] flex-col rounded-lg border border-sand bg-white shadow-xl sm:inset-x-auto sm:right-5 sm:bottom-5 sm:w-96">
       <div className="flex items-center justify-between border-b border-sand px-4 py-2">
-        <div><div className="font-display font-bold">Assistant</div><div className="text-[11px] text-gray-400">AI-generated. Answers come from your company data.</div></div>
+        <div><div className="font-display font-bold">Assistant</div><div className="text-[11px] text-ink/50">AI-generated. Answers come from your company data.</div></div>
         <button onClick={() => setOpen(false)} aria-label="Close" className="rounded px-2 text-xl leading-none hover:bg-sand/60">×</button>
       </div>
       <div className="min-h-[200px] flex-1 space-y-3 overflow-y-auto p-4 text-sm">
         {msgs.length === 0 && (
           <div>
-            <p className="text-gray-500">Ask about your data or company policy. You can write in English or Roman Urdu.</p>
+            <p className="text-ink/60">Ask about your data or company policy. You can write in English or Roman Urdu.</p>
             <div className="mt-2 flex flex-col gap-1.5">
               {(HINTS[role] || []).map((h) => <button key={h} onClick={() => send(h)} className="rounded-md border border-sand px-2 py-1.5 text-left hover:bg-sand/50">{h}</button>)}
             </div>
@@ -59,10 +59,10 @@ export default function AiChat({ role }) {
         {msgs.map((m, i) => (
           <div key={i} className={m.role === 'user' ? 'text-right' : ''}>
             <div className={`inline-block max-w-[90%] whitespace-pre-wrap rounded-lg px-3 py-2 text-left ${m.role === 'user' ? 'bg-pine-dark text-white' : m.error ? 'bg-red-50 text-red-800' : 'bg-sand/60'}`}>{m.content}</div>
-            {m.role === 'assistant' && !m.error && <div className="mt-0.5 text-[10px] text-gray-400">AI-generated</div>}
+            {m.role === 'assistant' && !m.error && <div className="mt-0.5 text-[10px] text-ink/50">AI-generated</div>}
           </div>
         ))}
-        {busy && <div className="text-xs text-gray-400">Thinking...</div>}
+        {busy && <div className="text-xs text-ink/50">Thinking...</div>}
         <div ref={end} />
       </div>
       <form className="flex gap-2 border-t border-sand p-3" onSubmit={(e) => { e.preventDefault(); send() }}>
@@ -72,3 +72,4 @@ export default function AiChat({ role }) {
     </div>
   )
 }
+

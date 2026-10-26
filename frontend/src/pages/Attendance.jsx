@@ -17,15 +17,15 @@ function getPosition() {
 function Calendar({ days }) {
   const offset = new Date(`${days[0].date}T00:00:00Z`).getUTCDay()
   const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  const color = { present: 'bg-green-100', late: 'bg-amber-100', half_day: 'bg-orange-100', absent: 'bg-red-100', leave: 'bg-blue-100', holiday: 'bg-purple-100', weekend: 'bg-gray-100' }
+  const color = { present: 'bg-teal-100', late: 'bg-amber-100', half_day: 'bg-orange-100', absent: 'bg-red-100', leave: 'bg-sky-100', holiday: 'bg-violet-100', weekend: 'bg-gray-100' }
   return (
     <div className="grid grid-cols-7 gap-1 text-center text-xs">
-      {names.map((n) => <div key={n} className="py-1 font-medium text-gray-500">{n}</div>)}
+      {names.map((n) => <div key={n} className="py-1 font-medium text-ink/60">{n}</div>)}
       {Array.from({ length: offset }).map((_, i) => <div key={`o${i}`} />)}
       {days.map((d) => (
         <div key={d.date} title={d.holiday || d.status || ''} className={`rounded p-1.5 ${color[d.status] || 'bg-white border border-sand'}`}>
           <div className="font-medium">{Number(d.date.slice(8))}</div>
-          <div className="truncate text-[10px] text-gray-600">{d.status === 'upcoming' || !d.status ? '' : d.status.replace('_', ' ')}</div>
+          <div className="truncate text-[10px] text-ink/70">{d.status === 'upcoming' || !d.status ? '' : d.status.replace('_', ' ')}</div>
         </div>
       ))}
     </div>
@@ -89,7 +89,7 @@ export default function Attendance() {
       {camera && <FaceCapture mode={camera === 'enroll' ? 'enroll' : 'verify'} onDone={onFace} onCancel={() => setCamera(null)} />}
       {face.data && !enrolled && !camera && (
         <Card title="Face attendance">
-          <p className="mb-3 text-sm text-gray-600">Register your face once. After that, check-in and check-out need a face scan.</p>
+          <p className="mb-3 text-sm text-ink/70">Register your face once. After that, check-in and check-out need a face scan.</p>
           <Btn disabled={busy} onClick={() => setCamera('enroll')}>Register my face</Btn>
         </Card>
       )}
@@ -119,15 +119,16 @@ export default function Attendance() {
       <Card title="My correction requests">
         <Err error={corr.error} />
         <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs text-gray-500"><th>Date</th><th>In</th><th>Out</th><th>Reason</th><th>Status</th></tr></thead>
+          <thead><tr className="text-left text-xs text-ink/60"><th>Date</th><th>In</th><th>Out</th><th>Reason</th><th>Status</th></tr></thead>
           <tbody>
             {(corr.data || []).map((c) => (
               <tr key={c._id} className="border-t border-sand"><td className="py-1.5">{c.date}</td><td>{c.checkIn}</td><td>{c.checkOut || '-'}</td><td>{c.reason}</td><td><Badge status={c.status} /></td></tr>
             ))}
-            {corr.data?.length === 0 && <tr><td colSpan="5" className="py-3 text-gray-400">No requests yet</td></tr>}
+            {corr.data?.length === 0 && <tr><td colSpan="5" className="py-3 text-ink/50">No requests yet</td></tr>}
           </tbody>
         </table>
       </Card>
     </div>
   )
 }
+

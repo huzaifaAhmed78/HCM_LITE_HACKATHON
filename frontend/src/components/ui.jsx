@@ -12,8 +12,8 @@ export function Field({ label, error, as: As = 'input', children, ...p }) {
       <span className="mb-1 block text-sm font-medium">{label}</span>
       <As
         className={cx(
-          'w-full rounded-md border bg-white px-3 py-2 text-sm transition-colors',
-          error ? 'border-red-500' : 'border-sand hover:border-pine/50'
+          'w-full rounded-lg border bg-white px-3 py-2 text-sm transition-colors focus:outline-none focus:ring-2',
+          error ? 'border-red-500 focus:ring-red-200' : 'border-sand hover:border-pine/50 focus:border-pine focus:ring-pine/20'
         )}
         {...p}
       >
@@ -26,26 +26,26 @@ export function Field({ label, error, as: As = 'input', children, ...p }) {
 
 export function Btn({ variant = 'primary', className, ...p }) {
   const styles = {
-    primary: 'bg-pine text-white hover:bg-pine-dark disabled:opacity-50',
-    ghost: 'border border-sand bg-white hover:bg-sand/60 disabled:opacity-50',
+    primary: 'bg-pine-dark text-white hover:bg-pine disabled:opacity-50',
+    ghost: 'border border-sand bg-white hover:bg-paper disabled:opacity-50',
     danger: 'border border-red-300 bg-white text-red-700 hover:bg-red-50 disabled:opacity-50',
   }
   return (
     <button
-      className={cx('rounded-md px-3.5 py-2 text-sm font-medium transition-colors', styles[variant], className)}
+      className={cx('rounded-lg px-4 py-2 text-sm font-medium transition duration-150 active:scale-[0.98]', styles[variant], className)}
       {...p}
     />
   )
 }
 
 export const Card = ({ className, ...p }) => (
-  <div className={cx('rounded-lg border border-sand bg-white', className)} {...p} />
+  <div className={cx('rounded-2xl border border-sand bg-white shadow-card', className)} {...p} />
 )
 
 export function Alert({ kind = 'error', children }) {
   if (!children) return null
   const s = kind === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber/30 bg-amber/10 text-amber'
-  return <div role="alert" className={cx('rounded-md border px-3 py-2 text-sm', s)}>{children}</div>
+  return <div role="alert" className={cx('rounded-xl border px-3 py-2 text-sm', s)}>{children}</div>
 }
 
 // The modal is rendered into document.body (portal), so parent layout such as "space-y-5"
@@ -64,11 +64,11 @@ export function Modal({ title, onClose, footer, children }) {
   }, [onClose])
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-3 sm:p-6">
-      <div role="dialog" aria-modal="true" className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
-        <div className="flex shrink-0 items-center justify-between border-b border-sand px-5 py-3">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <button onClick={onClose} aria-label="Close" className="rounded px-2 text-xl leading-none hover:bg-sand/60">&times;</button>
+    <div className="anim-fade fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-3 backdrop-blur-[2px] sm:p-6">
+      <div role="dialog" aria-modal="true" className="anim-pop flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-lift">
+        <div className="flex shrink-0 items-center justify-between border-b border-sand px-5 py-3.5">
+          <h2 className="font-display text-lg font-semibold">{title}</h2>
+          <button onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-lg text-xl leading-none text-ink/60 hover:bg-paper">&times;</button>
         </div>
         <div className="overflow-y-auto p-5">{children}</div>
         {footer && <div className="flex shrink-0 justify-end gap-2 border-t border-sand bg-white px-5 py-3">{footer}</div>}
@@ -87,7 +87,7 @@ export function TempPassword({ title = 'Login created', email, password, onClose
   return (
     <Modal title={title} onClose={onClose}>
       <p className="text-sm">Share these details with the user. The temporary password will not be shown again.</p>
-      <dl className="mt-3 space-y-2 rounded-md bg-paper p-3 text-sm">
+      <dl className="mt-3 space-y-2 rounded-xl bg-paper p-3 text-sm">
         <div><dt className="text-xs text-ink/60">Email</dt><dd className="font-medium">{email}</dd></div>
         <div><dt className="text-xs text-ink/60">Temporary password</dt><dd className="font-mono text-base font-semibold">{password}</dd></div>
       </dl>

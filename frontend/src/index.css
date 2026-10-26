@@ -1,22 +1,47 @@
 @import "tailwindcss";
 
 @theme {
-  --color-paper: #f5f7f3;
-  --color-ink: #14221b;
-  --color-pine: #0f7a46;
-  --color-pine-dark: #0a5a31;
-  --color-mint: #1fb67a;
-  --color-sand: #e3e8df;
+  /* Teal palette. Token names are unchanged, so every page picks up the new colours. */
+  --color-paper: #f1f5f5;
+  --color-ink: #10201f;
+  --color-pine: #0f6f6c;
+  --color-pine-dark: #0b4f4e;
+  --color-mint: #3fa8a0;
+  --color-sand: #e1e9e9;
   --color-amber: #b86e00;
+  --color-coral: #e0675a;
+  /* Heatmap scale, light to dark */
+  --color-heat-0: #e6eeee;
+  --color-heat-1: #c3dcda;
+  --color-heat-2: #8dbdb9;
+  --color-heat-3: #4b948f;
+  --color-heat-4: #0f6a68;
   --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
-  --shadow-card: 0 1px 2px rgb(15 40 28 / 0.04), 0 8px 24px -12px rgb(15 40 28 / 0.14);
-  --shadow-lift: 0 2px 4px rgb(15 40 28 / 0.05), 0 14px 30px -14px rgb(15 40 28 / 0.24);
+  --shadow-card: 0 1px 2px rgb(10 60 58 / 0.04), 0 6px 20px -12px rgb(10 60 58 / 0.14);
+  --shadow-lift: 0 2px 4px rgb(10 60 58 / 0.05), 0 14px 30px -14px rgb(10 60 58 / 0.26);
 }
 
 body { background: var(--color-paper); color: var(--color-ink); font-family: var(--font-sans); }
 h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.01em; }
 :focus-visible { outline: 2px solid var(--color-pine); outline-offset: 2px; }
+
+/* Tables: soft header band, roomy cells and a gentle row hover on every page */
+@layer base {
+  th {
+    padding: 0.6rem 0.75rem;
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: color-mix(in srgb, var(--color-ink) 55%, transparent);
+    background: var(--color-paper);
+  }
+  th:first-child { border-top-left-radius: 0.6rem; border-bottom-left-radius: 0.6rem; }
+  th:last-child { border-top-right-radius: 0.6rem; border-bottom-right-radius: 0.6rem; }
+  td { padding: 0.65rem 0.75rem; }
+  tbody tr { transition: background-color 0.15s; }
+  tbody tr:hover { background: color-mix(in srgb, var(--color-paper) 65%, transparent); }
+}
 
 /* Motion: page change, dialogs, toasts, chart bars, delete exit, loading skeleton */
 @keyframes page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -27,6 +52,7 @@ h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.01em; }
 @keyframes grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 @keyframes leave-out { to { opacity: 0; transform: translateX(18px); } }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes cell-in { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: none; } }
 
 .anim-page { animation: page-in 0.28s ease-out both; }
 .anim-fade { animation: fade-in 0.2s ease-out both; }
@@ -35,7 +61,7 @@ h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.01em; }
 .anim-leave { animation: leave-out 0.22s ease-in forwards; }
 
 .skeleton {
-  background: linear-gradient(90deg, var(--color-sand) 25%, #f1f4ee 50%, var(--color-sand) 75%);
+  background: linear-gradient(90deg, var(--color-sand) 25%, #f1f6f6 50%, var(--color-sand) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite;
   border-radius: 0.75rem;

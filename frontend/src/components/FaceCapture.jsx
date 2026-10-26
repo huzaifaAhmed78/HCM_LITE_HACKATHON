@@ -104,7 +104,7 @@ export default function FaceCapture({ mode = 'verify', onDone, onCancel }) {
     <div className="mb-5 rounded-lg border border-sand bg-white p-4">
       <div className="mb-2 text-sm font-medium">{mode === 'enroll' ? 'Register face' : 'Verify face'}</div>
       <video ref={video} muted playsInline className="mb-3 aspect-[4/3] w-full max-w-sm rounded-md bg-black object-cover" style={{ transform: 'scaleX(-1)' }} />
-      <div className="mb-3 text-sm text-gray-600">{msg}</div>
+      <div className="mb-3 text-sm text-ink/70">{msg}</div>
       <div className="flex gap-2">
         <Btn disabled={!ready || busy} onClick={scan}>Scan</Btn>
         <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
@@ -112,3 +112,4 @@ export default function FaceCapture({ mode = 'verify', onDone, onCancel }) {
     </div>
   )
 }
+

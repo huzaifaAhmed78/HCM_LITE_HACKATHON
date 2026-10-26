@@ -19,7 +19,7 @@ export default function Settings() {
     if (data) setF({ companyName: data.companyName, timezone: data.timezone, officeStart: data.officeStart, graceMinutes: data.graceMinutes, halfDayHours: data.halfDayHours, weekend: data.weekend, lat: data.office?.lat ?? '', lng: data.office?.lng ?? '', radiusM: data.office?.radiusM ?? 150 })
   }, [data])
 
-  if (!f) return <div><Err error={error} /><p className="text-sm text-gray-400">Loading settings...</p></div>
+  if (!f) return <div><Err error={error} /><p className="text-sm text-ink/50">Loading settings...</p></div>
   const set = (k, v) => { setOk(false); setF({ ...f, [k]: v }) }
   const toggleDay = (d) => set('weekend', f.weekend.includes(d) ? f.weekend.filter((x) => x !== d) : [...f.weekend, d])
   const here = () => navigator.geolocation?.getCurrentPosition((p) => setF({ ...f, lat: Number(p.coords.latitude.toFixed(6)), lng: Number(p.coords.longitude.toFixed(6)) }), () => setErr({ message: 'Could not read your location. Allow location access or type the numbers.' }), { enableHighAccuracy: true })
@@ -57,7 +57,7 @@ export default function Settings() {
               <Field label="Half day under (hours)"><input type="number" min="1" max="12" step="0.5" className={inputCls} value={f.halfDayHours} onChange={(e) => set('halfDayHours', e.target.value)} /></Field>
             </div>
             <div className="mt-3 text-sm">
-              <span className="mb-1 block text-xs text-gray-600">Weekend</span>
+              <span className="mb-1 block text-xs text-ink/70">Weekend</span>
               <div className="flex flex-wrap gap-3">{DAYS.map((d, i) => <label key={d} className="flex items-center gap-1"><input type="checkbox" checked={f.weekend.includes(i)} onChange={() => toggleDay(i)} />{d}</label>)}</div>
             </div>
           </Card>
@@ -68,14 +68,15 @@ export default function Settings() {
               <Field label="Radius (metres)"><input type="number" min="10" max="5000" className={inputCls} value={f.radiusM} onChange={(e) => set('radiusM', e.target.value)} /></Field>
             </div>
             {canEdit && <Btn type="button" variant="ghost" className="mt-3" onClick={here}>Use my current location</Btn>}
-            <p className="mt-2 text-xs text-gray-500">Leave latitude and longitude empty to skip the location check.</p>
+            <p className="mt-2 text-xs text-ink/60">Leave latitude and longitude empty to skip the location check.</p>
           </Card>
         </fieldset>
         <Err error={err} />
         {canEdit ? (
-          <div className="flex items-center gap-3"><Btn disabled={busy}>Save settings</Btn>{ok && <span className="text-sm text-green-700">Saved. Changes apply to new records only.</span>}</div>
-        ) : <p className="text-sm text-gray-500">Only Admin can change settings.</p>}
+          <div className="flex items-center gap-3"><Btn disabled={busy}>Save settings</Btn>{ok && <span className="text-sm text-teal-700">Saved. Changes apply to new records only.</span>}</div>
+        ) : <p className="text-sm text-ink/60">Only Admin can change settings.</p>}
       </form>
     </div>
   )
 }
+

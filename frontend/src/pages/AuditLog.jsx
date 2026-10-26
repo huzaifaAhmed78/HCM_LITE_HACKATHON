@@ -22,30 +22,30 @@ export default function AuditLog() {
           </select>
         </div>}>
         <Err error={error} />
-        {loading && !data && <p className="text-sm text-gray-400">Loading...</p>}
+        {loading && !data && <p className="text-sm text-ink/50">Loading...</p>}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead><tr className="text-left text-xs text-gray-500"><th>When</th><th>Who</th><th>Action</th><th>Entity</th><th /></tr></thead>
+            <thead><tr className="text-left text-xs text-ink/60"><th>When</th><th>Who</th><th>Action</th><th>Entity</th><th /></tr></thead>
             <tbody>
               {(data?.items || []).map((a) => (
                 <Fragment key={a.id}>
                   <tr className="border-t border-sand">
                     <td className="whitespace-nowrap py-1.5">{new Date(a.at).toLocaleString()}</td>
-                    <td>{a.actor} <span className="text-xs text-gray-400">{a.actorRole}</span></td>
+                    <td>{a.actor} <span className="text-xs text-ink/50">{a.actorRole}</span></td>
                     <td className="font-medium">{a.action}</td><td>{a.entity}</td>
                     <td className="text-right"><Btn variant="ghost" onClick={() => setOpen(open === a.id ? null : a.id)}>{open === a.id ? 'Hide' : 'Details'}</Btn></td>
                   </tr>
                   {open === a.id && (
                     <tr className="bg-paper"><td colSpan="5" className="p-3">
                       <div className="grid gap-3 md:grid-cols-2">
-                        <div><div className="mb-1 text-xs font-medium text-gray-500">Before</div><pre className="max-h-60 overflow-auto rounded bg-white p-2 text-xs">{JSON.stringify(a.before, null, 2) ?? 'null'}</pre></div>
-                        <div><div className="mb-1 text-xs font-medium text-gray-500">After</div><pre className="max-h-60 overflow-auto rounded bg-white p-2 text-xs">{JSON.stringify(a.after, null, 2) ?? 'null'}</pre></div>
+                        <div><div className="mb-1 text-xs font-medium text-ink/60">Before</div><pre className="max-h-60 overflow-auto rounded bg-white p-2 text-xs">{JSON.stringify(a.before, null, 2) ?? 'null'}</pre></div>
+                        <div><div className="mb-1 text-xs font-medium text-ink/60">After</div><pre className="max-h-60 overflow-auto rounded bg-white p-2 text-xs">{JSON.stringify(a.after, null, 2) ?? 'null'}</pre></div>
                       </div>
                     </td></tr>
                   )}
                 </Fragment>
               ))}
-              {data?.items.length === 0 && <tr><td colSpan="5" className="py-3 text-gray-400">No entries</td></tr>}
+              {data?.items.length === 0 && <tr><td colSpan="5" className="py-3 text-ink/50">No entries</td></tr>}
             </tbody>
           </table>
         </div>
@@ -60,3 +60,4 @@ export default function AuditLog() {
     </div>
   )
 }
+

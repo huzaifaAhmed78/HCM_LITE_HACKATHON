@@ -45,7 +45,7 @@ export default function Leave() {
             <div key={b.key} className="rounded-md border border-sand p-3 text-sm">
               <div className="font-medium">{b.name}</div>
               <div className="font-display text-2xl font-bold">{b.remaining == null ? 'Unlimited' : b.remaining}</div>
-              <div className="text-xs text-gray-500">{b.quota == null ? 'unpaid' : `of ${b.quota}`} &middot; used {b.used} &middot; pending {b.pending}</div>
+              <div className="text-xs text-ink/60">{b.quota == null ? 'unpaid' : `of ${b.quota}`} &middot; used {b.used} &middot; pending {b.pending}</div>
             </div>
           ))}
         </div>
@@ -71,13 +71,13 @@ export default function Leave() {
           <Field label="Reason"><input className={inputCls} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
           <div className="sm:col-span-4"><Btn disabled={busy}>Apply</Btn></div>
         </form>
-        <p className="mt-2 text-xs text-gray-500">Weekends and holidays are not counted.</p>
+        <p className="mt-2 text-xs text-ink/60">Weekends and holidays are not counted.</p>
       </Card>
 
       <Card title="My requests">
         <Err error={list.error} />
         <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs text-gray-500"><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Note</th><th /></tr></thead>
+          <thead><tr className="text-left text-xs text-ink/60"><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Note</th><th /></tr></thead>
           <tbody>
             {(list.data || []).map((r) => (
               <tr key={r._id} className="border-t border-sand">
@@ -86,10 +86,11 @@ export default function Leave() {
                 <td className="text-right">{r.status === 'pending' && <Btn variant="ghost" onClick={() => cancel(r._id)}>Cancel</Btn>}</td>
               </tr>
             ))}
-            {list.data?.length === 0 && <tr><td colSpan="7" className="py-3 text-gray-400">No requests yet</td></tr>}
+            {list.data?.length === 0 && <tr><td colSpan="7" className="py-3 text-ink/50">No requests yet</td></tr>}
           </tbody>
         </table>
       </Card>
     </div>
   )
 }
+

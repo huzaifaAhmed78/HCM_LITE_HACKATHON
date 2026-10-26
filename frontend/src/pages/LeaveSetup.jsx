@@ -53,7 +53,7 @@ function LeaveTypes() {
       {loading && !data && <Skeleton className="mb-4 h-24" />}
       <div className="overflow-x-auto">
         <table className="mb-4 w-full text-sm">
-          <thead><tr className="text-left text-xs text-gray-500"><th>Name</th><th>Key</th><th>Yearly quota</th><th>Paid</th><th /></tr></thead>
+          <thead><tr className="text-left text-xs text-ink/60"><th>Name</th><th>Key</th><th>Yearly quota</th><th>Paid</th><th /></tr></thead>
           <tbody>
             {(data || []).map((t) => (
               <tr key={idOf(t)} className="border-t border-sand">
@@ -132,3 +132,4 @@ export default function LeaveSetup() {
     </div>
   )
 }
+

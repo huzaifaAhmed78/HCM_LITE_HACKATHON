@@ -46,10 +46,10 @@ export default function Payroll() {
             ))}
           </div>
         )}
-        {!r && !run.loading && <p className="text-sm text-gray-500">{user.role === 'hr' ? 'No payroll for this month yet. Click Create draft.' : 'HR has not created a draft for this month yet.'}</p>}
+        {!r && !run.loading && <p className="text-sm text-ink/60">{user.role === 'hr' ? 'No payroll for this month yet. Click Create draft.' : 'HR has not created a draft for this month yet.'}</p>}
         {r && (
           <>
-            <p className={`mb-3 inline-block rounded px-2 py-0.5 text-xs font-medium ${locked ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
+            <p className={`mb-3 inline-block rounded px-2 py-0.5 text-xs font-medium ${locked ? 'bg-teal-50 text-teal-800' : 'bg-amber-50 text-amber-800'}`}>
               {locked ? `Finalized and locked ${new Date(r.finalizedAt).toLocaleDateString()}` : 'Draft, waiting for Admin to finalize'}
             </p>
             <div className="mb-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
@@ -61,11 +61,11 @@ export default function Payroll() {
             </div>
             <div className="overflow-x-auto">
               <table className="w-full whitespace-nowrap text-sm">
-                <thead><tr className="text-left text-xs text-gray-500"><th>Employee</th><th>Basic</th><th>Gross</th><th>Absent</th><th>Unpaid</th><th>Half</th><th>Deduction</th><th>Tax</th><th>Net</th><th /></tr></thead>
+                <thead><tr className="text-left text-xs text-ink/60"><th>Employee</th><th>Basic</th><th>Gross</th><th>Absent</th><th>Unpaid</th><th>Half</th><th>Deduction</th><th>Tax</th><th>Net</th><th /></tr></thead>
                 <tbody>
                   {r.items.map((i) => (
                     <tr key={i.employeeId} className="border-t border-sand">
-                      <td className="py-1.5">{i.name} <span className="text-xs text-gray-400">{i.employeeCode}</span>{i.eligibleDays !== i.workingDays && <span className="ml-1 rounded bg-sand px-1 text-[10px]">prorated {i.eligibleDays}/{i.workingDays}</span>}</td>
+                      <td className="py-1.5">{i.name} <span className="text-xs text-ink/50">{i.employeeCode}</span>{i.eligibleDays !== i.workingDays && <span className="ml-1 rounded bg-sand px-1 text-[10px]">prorated {i.eligibleDays}/{i.workingDays}</span>}</td>
                       <td>{money(i.basic)}</td><td>{money(i.earnedGross)}</td><td>{i.absentDays}</td><td>{i.unpaidLeaveDays}</td><td>{i.halfDays}</td>
                       <td>{money(i.deduction)}</td><td>{money(i.tax)}</td><td className="font-medium">{money(i.net)}</td>
                       <td><Btn variant="ghost" onClick={() => pdf(i)}>PDF</Btn></td>
@@ -74,10 +74,11 @@ export default function Payroll() {
                 </tbody>
               </table>
             </div>
-            <p className="mt-3 text-xs text-gray-400">Absent = past working day with no attendance record and no approved leave. Per day = gross / working days. Deduction = (absent + unpaid + 0.5 x half days) x per day. Joiners are prorated. Employees who have left are not prorated because the employee record has no exit date.</p>
+            <p className="mt-3 text-xs text-ink/50">Absent = past working day with no attendance record and no approved leave. Per day = gross / working days. Deduction = (absent + unpaid + 0.5 x half days) x per day. Joiners are prorated. Employees who have left are not prorated because the employee record has no exit date.</p>
           </>
         )}
       </Card>
     </div>
   )
 }
+

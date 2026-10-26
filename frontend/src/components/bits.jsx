@@ -3,32 +3,32 @@ import { useCallback, useEffect, useState } from 'react'
 export const cx = (...a) => a.filter(Boolean).join(' ')
 
 export const STATUS = {
-  present: { label: 'Present', cls: 'bg-green-100 text-green-800' },
-  late: { label: 'Late', cls: 'bg-amber-100 text-amber-800' },
-  half_day: { label: 'Half day', cls: 'bg-orange-100 text-orange-800' },
-  absent: { label: 'Absent', cls: 'bg-red-100 text-red-800' },
-  leave: { label: 'On leave', cls: 'bg-blue-100 text-blue-800' },
-  holiday: { label: 'Holiday', cls: 'bg-purple-100 text-purple-800' },
-  weekend: { label: 'Weekend', cls: 'bg-gray-100 text-gray-500' },
-  upcoming: { label: 'Not yet', cls: 'bg-white text-gray-400' },
-  pending: { label: 'Pending', cls: 'bg-amber-100 text-amber-800' },
-  approved: { label: 'Approved', cls: 'bg-green-100 text-green-800' },
-  rejected: { label: 'Rejected', cls: 'bg-red-100 text-red-800' },
-  cancelled: { label: 'Cancelled', cls: 'bg-gray-100 text-gray-500' },
+  present: { label: 'Present', cls: 'bg-teal-50 text-teal-800' },
+  late: { label: 'Late', cls: 'bg-amber-50 text-amber-800' },
+  half_day: { label: 'Half day', cls: 'bg-orange-50 text-orange-800' },
+  absent: { label: 'Absent', cls: 'bg-red-50 text-red-700' },
+  leave: { label: 'On leave', cls: 'bg-sky-50 text-sky-800' },
+  holiday: { label: 'Holiday', cls: 'bg-violet-50 text-violet-800' },
+  weekend: { label: 'Weekend', cls: 'bg-gray-100 text-ink/60' },
+  upcoming: { label: 'Not yet', cls: 'bg-white text-ink/50' },
+  pending: { label: 'Pending', cls: 'bg-amber-50 text-amber-800' },
+  approved: { label: 'Approved', cls: 'bg-teal-50 text-teal-800' },
+  rejected: { label: 'Rejected', cls: 'bg-red-50 text-red-700' },
+  cancelled: { label: 'Cancelled', cls: 'bg-gray-100 text-ink/60' },
 }
 
 export function Badge({ status }) {
   const s = STATUS[status]
   if (!s) return <span className="text-gray-300">-</span>
-  return <span className={cx('inline-block rounded-full px-2.5 py-0.5 text-xs font-medium', s.cls)}>{s.label}</span>
+  return <span className={cx('inline-block rounded-md px-2 py-0.5 text-xs font-medium', s.cls)}>{s.label}</span>
 }
 
 export function Card({ title, right, className, children }) {
   return (
-    <section className={cx('mb-5 rounded-2xl border border-sand bg-white p-5 shadow-card', className)}>
+    <section className={cx(!/(^|\s)mb-/.test(className || '') && 'mb-5', 'rounded-2xl border border-sand bg-white p-5 shadow-card', className)}>
       {(title || right) && (
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-bold">{title}</h2>
+          <h2 className="font-display text-base font-semibold">{title}</h2>
           {right}
         </div>
       )}
@@ -38,7 +38,7 @@ export function Card({ title, right, className, children }) {
 }
 
 export function Btn({ variant = 'primary', className, ...p }) {
-  const base = 'rounded-full px-4 py-1.5 text-sm font-medium transition duration-150 active:scale-[0.98] disabled:opacity-50'
+  const base = 'rounded-lg px-4 py-2 text-sm font-medium transition duration-150 active:scale-[0.98] disabled:opacity-50'
   const v = {
     primary: 'bg-pine-dark text-white hover:bg-pine',
     ghost: 'border border-sand bg-white hover:bg-paper',
@@ -48,12 +48,12 @@ export function Btn({ variant = 'primary', className, ...p }) {
 }
 
 export const inputCls =
-  'w-full rounded-xl border border-sand bg-white px-3 py-2 text-sm transition-colors hover:border-pine/50 focus:border-pine focus:outline-none focus:ring-2 focus:ring-pine/20'
+  'w-full rounded-lg border border-sand bg-white px-3 py-2 text-sm transition-colors hover:border-pine/50 focus:border-pine focus:outline-none focus:ring-2 focus:ring-pine/20'
 
 export function Field({ label, children }) {
   return (
     <label className="block text-sm">
-      <span className="mb-1 block text-xs text-gray-600">{label}</span>
+      <span className="mb-1 block text-xs text-ink/60">{label}</span>
       {children}
     </label>
   )

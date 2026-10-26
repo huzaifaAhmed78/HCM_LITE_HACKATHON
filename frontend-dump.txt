@@ -1,0 +1,2856 @@
+﻿
+===== .env.example =====
+# Leave empty for local dev (uses the Vite proxy). On Vercel set it to your Render URL, e.g.
+# VITE_API_URL=https://hcm-lite-backend.onrender.com/api/v1
+VITE_API_URL=
+
+
+===== .gitignore =====
+node_modules
+dist
+.env
+
+
+===== index.html =====
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HCM-Lite</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+===== package.json =====
+{
+  "name": "hcm-lite-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vladmandic/face-api": "^1.7.15",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.0",
+    "vite": "^5.4.11"
+  }
+}
+
+
+===== vercel.json =====
+{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }
+
+
+===== vite.config.js =====
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import fs from 'node:fs'
+import path from 'node:path'
+
+// Face models ship inside the @vladmandic/face-api package (node_modules/@vladmandic/face-api/model).
+// This plugin serves them at /models in dev and copies them into dist/models on build,
+// so you do not have to download or copy anything by hand.
+function faceModels() {
+  const dir = path.resolve('node_modules/@vladmandic/face-api/model')
+  const types = { '.json': 'application/json', '.bin': 'application/octet-stream' }
+  return {
+    name: 'face-models',
+    configureServer(server) {
+      server.middlewares.use('/models', (req, res, next) => {
+        const file = path.join(dir, decodeURIComponent((req.url || '').split('?')[0]))
+        if (!file.startsWith(dir) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return next()
+        res.setHeader('Content-Type', types[path.extname(file)] || 'application/octet-stream')
+        fs.createReadStream(file).pipe(res)
+      })
+    },
+    closeBundle() {
+      if (!fs.existsSync(dir)) return
+      const out = path.resolve('dist/models')
+      fs.mkdirSync(out, { recursive: true })
+      for (const f of fs.readdirSync(dir)) {
+        if (/\.(json|bin)$/.test(f)) fs.copyFileSync(path.join(dir, f), path.join(out, f))
+      }
+    },
+  }
+}
+
+// In dev, /api is proxied to the backend, so no CORS setup is needed locally.
+export default defineConfig({
+  plugins: [react(), tailwindcss(), faceModels()],
+  server: { port: 5173, proxy: { '/api': 'http://localhost:5000' } },
+})
+
+
+===== src\api.js =====
+// All backend calls go through api(). Backend shape: { success, data, message, errors: [{ field, message }] }
+const BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://hcm-lite-backend.vercel.app/api/v1' : '/api/v1')
+let token = localStorage.getItem('token')
+
+export const getToken = () => token
+export const setToken = (t) => {
+  token = t
+  if (t) localStorage.setItem('token', t)
+  else localStorage.removeItem('token')
+}
+
+export class ApiError extends Error {
+  constructor(status, message, errors = []) {
+    super(message)
+    this.status = status
+    this.errors = errors
+  }
+}
+
+export async function api(path, { method = 'GET', body } = {}) {
+  let res
+  try {
+    res = await fetch(BASE + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+  } catch {
+    throw new ApiError(0, 'Cannot reach the server. Check that the backend is running.')
+  }
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    if (res.status === 401 && token && !path.startsWith('/auth/login')) {
+      setToken(null)
+      window.dispatchEvent(new Event('auth:logout'))
+    }
+    throw new ApiError(res.status, json.message || 'Request failed', json.errors || [])
+  }
+  return json.data
+}
+
+// Downloads a file (for example a payslip PDF). A plain link cannot send the login token, so we fetch it.
+export async function download(path, filename) {
+  let res
+  try {
+    res = await fetch(BASE + path, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  } catch {
+    throw new ApiError(0, 'Cannot reach the server. Check that the backend is running.')
+  }
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, json.message || 'Download failed')
+  }
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+
+===== src\App.jsx =====
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { useAuth } from './auth.jsx'
+import Layout from './components/Layout.jsx'
+import Setup from './pages/Setup.jsx'
+import Login from './pages/Login.jsx'
+import ChangePassword from './pages/ChangePassword.jsx'
+import Home from './pages/Home.jsx'
+import NamedList from './pages/NamedList.jsx'
+import HrUsers from './pages/HrUsers.jsx'
+import Employees from './pages/Employees.jsx'
+import EmployeeDetail from './pages/EmployeeDetail.jsx'
+import MyProfile from './pages/MyProfile.jsx'
+import Attendance from './pages/Attendance.jsx'
+import AttendanceAdmin from './pages/AttendanceAdmin.jsx'
+import Leave from './pages/Leave.jsx'
+import LeaveInbox from './pages/LeaveInbox.jsx'
+import LeaveSetup from './pages/LeaveSetup.jsx'
+import Payroll from './pages/Payroll.jsx'
+import Payslips from './pages/Payslips.jsx'
+import Settings from './pages/Settings.jsx'
+import AuditLog from './pages/AuditLog.jsx'
+import Announcements from './pages/Announcements.jsx'
+
+function Guard({ roles, children }) {
+  const { user } = useAuth()
+  const loc = useLocation()
+  if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />
+  if (user.mustChangePassword && loc.pathname !== '/change-password') return <Navigate to="/change-password" replace />
+  if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />
+  return children
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/setup" element={<Setup />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/change-password" element={<Guard><ChangePassword /></Guard>} />
+      <Route element={<Guard><Layout /></Guard>}>
+        <Route path="/" element={<Home />} />
+        <Route path="/departments" element={<Guard roles={['admin']}><NamedList title="Departments" path="/departments" noun="department" /></Guard>} />
+        <Route path="/designations" element={<Guard roles={['admin']}><NamedList title="Designations" path="/designations" noun="designation" /></Guard>} />
+        <Route path="/hr-users" element={<Guard roles={['admin']}><HrUsers /></Guard>} />
+        <Route path="/employees" element={<Guard roles={['hr', 'admin']}><Employees /></Guard>} />
+        <Route path="/employees/:id" element={<Guard roles={['hr', 'admin']}><EmployeeDetail /></Guard>} />
+        <Route path="/me" element={<Guard roles={['employee']}><MyProfile /></Guard>} />
+        <Route path="/attendance" element={<Guard roles={['employee']}><Attendance /></Guard>} />
+        <Route path="/attendance-board" element={<Guard roles={['hr', 'admin']}><AttendanceAdmin /></Guard>} />
+        <Route path="/leave" element={<Guard roles={['employee']}><Leave /></Guard>} />
+        <Route path="/leave-requests" element={<Guard roles={['hr', 'admin']}><LeaveInbox /></Guard>} />
+        <Route path="/leave-setup" element={<Guard roles={['admin']}><LeaveSetup /></Guard>} />
+        <Route path="/payroll" element={<Guard roles={['hr', 'admin']}><Payroll /></Guard>} />
+        <Route path="/payslips" element={<Guard roles={['employee']}><Payslips /></Guard>} />
+        <Route path="/settings" element={<Guard roles={['hr', 'admin']}><Settings /></Guard>} />
+        <Route path="/audit" element={<Guard roles={['admin']}><AuditLog /></Guard>} />
+        <Route path="/announcements" element={<Guard><Announcements /></Guard>} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
+
+
+===== src\auth.jsx =====
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { api, getToken, setToken } from './api.js'
+
+const Ctx = createContext(null)
+export const useAuth = () => useContext(Ctx)
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(() => {
+    try { return getToken() ? JSON.parse(localStorage.getItem('user')) : null } catch { return null }
+  })
+
+  const apply = useCallback(({ token, user }) => {
+    setToken(token)
+    localStorage.setItem('user', JSON.stringify(user))
+    setUser(user)
+  }, [])
+
+  const logout = useCallback(() => {
+    setToken(null)
+    localStorage.removeItem('user')
+    setUser(null)
+  }, [])
+
+  useEffect(() => {
+    window.addEventListener('auth:logout', logout)
+    return () => window.removeEventListener('auth:logout', logout)
+  }, [logout])
+
+  const login = async (email, password) => {
+    const data = await api('/auth/login', { method: 'POST', body: { email, password } })
+    apply(data)
+    return data.user
+  }
+
+  return <Ctx.Provider value={{ user, login, logout, apply }}>{children}</Ctx.Provider>
+}
+
+
+===== src\index.css =====
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #f5f7f3;
+  --color-ink: #14221b;
+  --color-pine: #0f7a46;
+  --color-pine-dark: #0a5a31;
+  --color-mint: #1fb67a;
+  --color-sand: #e3e8df;
+  --color-amber: #b86e00;
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --shadow-card: 0 1px 2px rgb(15 40 28 / 0.04), 0 8px 24px -12px rgb(15 40 28 / 0.14);
+  --shadow-lift: 0 2px 4px rgb(15 40 28 / 0.05), 0 14px 30px -14px rgb(15 40 28 / 0.24);
+}
+
+body { background: var(--color-paper); color: var(--color-ink); font-family: var(--font-sans); }
+h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.01em; }
+:focus-visible { outline: 2px solid var(--color-pine); outline-offset: 2px; }
+
+/* Motion: page change, dialogs, toasts, chart bars, delete exit, loading skeleton */
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(10px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes toast-in { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+@keyframes grow-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes leave-out { to { opacity: 0; transform: translateX(18px); } }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+.anim-page { animation: page-in 0.28s ease-out both; }
+.anim-fade { animation: fade-in 0.2s ease-out both; }
+.anim-pop { animation: pop-in 0.2s ease-out both; }
+.anim-toast { animation: toast-in 0.25s ease-out both; }
+.anim-leave { animation: leave-out 0.22s ease-in forwards; }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--color-sand) 25%, #f1f4ee 50%, var(--color-sand) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 0.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
+/* Stop the browser's blue autofill background from clashing with the form fields */
+input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 100px #fff inset;
+  -webkit-text-fill-color: var(--color-ink);
+}
+
+
+===== src\main.jsx =====
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
+import { AuthProvider } from './auth.jsx'
+import { ToastProvider } from './components/Toast.jsx'
+import App from './App.jsx'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <AuthProvider>
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </AuthProvider>
+    </BrowserRouter>
+  </React.StrictMode>
+)
+
+
+===== src\components\AiChat.jsx =====
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../api.js'
+import { Btn, inputCls } from './bits.jsx'
+
+const HINTS = {
+  employee: ['How many sick leaves do I have left this year?', 'Can I take leave on a public holiday?'],
+  hr: ['Who is on leave today?', 'Who came late most often this month?', 'What is this month’s attendance rate?'],
+  admin: ['How many active employees do we have?', 'What is the payroll summary for this month?'],
+}
+
+// Floating assistant. Opens from the button or from anywhere via window.dispatchEvent(new Event('ai:open')).
+export default function AiChat({ role }) {
+  const [open, setOpen] = useState(false)
+  const [msgs, setMsgs] = useState([])
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const end = useRef(null)
+
+  useEffect(() => {
+    const on = () => setOpen(true)
+    window.addEventListener('ai:open', on)
+    return () => window.removeEventListener('ai:open', on)
+  }, [])
+  useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs, busy])
+
+  const send = async (q) => {
+    const message = (q ?? text).trim()
+    if (!message || busy) return
+    setText('')
+    const history = msgs.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content }))
+    setMsgs((m) => [...m, { role: 'user', content: message }])
+    setBusy(true)
+    try {
+      const res = await api('/ai/chat', { method: 'POST', body: { message, history } })
+      setMsgs((m) => [...m, { role: 'assistant', content: res.answer }])
+    } catch (e) {
+      setMsgs((m) => [...m, { role: 'assistant', content: e.message, error: true }])
+    } finally { setBusy(false) }
+  }
+
+  if (!open) {
+    return <button onClick={() => setOpen(true)} className="fixed bottom-5 right-5 z-40 rounded-full bg-pine-dark px-4 py-3 text-sm font-medium text-white shadow-lg hover:opacity-90">Ask assistant</button>
+  }
+  return (
+    <div className="fixed inset-x-3 bottom-3 z-40 flex max-h-[80vh] flex-col rounded-lg border border-sand bg-white shadow-xl sm:inset-x-auto sm:right-5 sm:bottom-5 sm:w-96">
+      <div className="flex items-center justify-between border-b border-sand px-4 py-2">
+        <div><div className="font-display font-bold">Assistant</div><div className="text-[11px] text-gray-400">AI-generated. Answers come from your company data.</div></div>
+        <button onClick={() => setOpen(false)} aria-label="Close" className="rounded px-2 text-xl leading-none hover:bg-sand/60">×</button>
+      </div>
+      <div className="min-h-[200px] flex-1 space-y-3 overflow-y-auto p-4 text-sm">
+        {msgs.length === 0 && (
+          <div>
+            <p className="text-gray-500">Ask about your data or company policy. You can write in English or Roman Urdu.</p>
+            <div className="mt-2 flex flex-col gap-1.5">
+              {(HINTS[role] || []).map((h) => <button key={h} onClick={() => send(h)} className="rounded-md border border-sand px-2 py-1.5 text-left hover:bg-sand/50">{h}</button>)}
+            </div>
+          </div>
+        )}
+        {msgs.map((m, i) => (
+          <div key={i} className={m.role === 'user' ? 'text-right' : ''}>
+            <div className={`inline-block max-w-[90%] whitespace-pre-wrap rounded-lg px-3 py-2 text-left ${m.role === 'user' ? 'bg-pine-dark text-white' : m.error ? 'bg-red-50 text-red-800' : 'bg-sand/60'}`}>{m.content}</div>
+            {m.role === 'assistant' && !m.error && <div className="mt-0.5 text-[10px] text-gray-400">AI-generated</div>}
+          </div>
+        ))}
+        {busy && <div className="text-xs text-gray-400">Thinking...</div>}
+        <div ref={end} />
+      </div>
+      <form className="flex gap-2 border-t border-sand p-3" onSubmit={(e) => { e.preventDefault(); send() }}>
+        <input className={inputCls} placeholder="Type your question" value={text} maxLength={1000} onChange={(e) => setText(e.target.value)} />
+        <Btn disabled={busy || !text.trim()}>Send</Btn>
+      </form>
+    </div>
+  )
+}
+
+
+===== src\components\Announcements.jsx =====
+import { Link } from 'react-router-dom'
+import { api } from '../api.js'
+import { Card, Err, Skeleton, useLoad } from './bits.jsx'
+
+export default function AnnouncementsCard({ limit = 3 }) {
+  const { data, error, loading } = useLoad(() => api('/announcements'), [])
+  return (
+    <Card title="Announcements" right={<Link to="/announcements" className="text-sm text-pine underline">See all</Link>}>
+      <Err error={error} />
+      {loading && !data && <div className="space-y-2"><Skeleton className="h-12" /><Skeleton className="h-12" /></div>}
+      {data?.length === 0 && <p className="text-sm text-ink/60">No announcements yet.</p>}
+      <ul className="space-y-3">
+        {(data || []).slice(0, limit).map((a) => (
+          <li key={a.id ?? a._id} className="rounded-xl bg-paper p-3 text-sm">
+            <div className="font-medium">{a.title}</div>
+            <div className="mt-0.5 whitespace-pre-wrap text-ink/80">{a.body}</div>
+            <div className="mt-1 text-xs text-ink/50">{a.authorName} ({a.authorRole}) &middot; {new Date(a.createdAt).toLocaleDateString()}</div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
+
+===== src\components\AuthShell.jsx =====
+export default function AuthShell({ title, subtitle, children }) {
+  return (
+    <div className="grid min-h-screen md:grid-cols-[1fr_1.1fr]">
+      <div className="hidden bg-pine-dark p-12 text-white md:flex md:flex-col md:justify-between">
+        <div className="font-display text-3xl font-bold">HCM-Lite</div>
+        <div>
+          <p className="font-display text-4xl font-semibold leading-tight">Hiring, attendance, leave and payroll in one place.</p>
+          <p className="mt-4 max-w-sm text-sm text-white/70">A lightweight people-operations system for growing teams.</p>
+        </div>
+        <div className="text-xs text-white/50">Hackathon build</div>
+      </div>
+      <div className="flex items-center justify-center p-6">
+        <div className="w-full max-w-sm">
+          <h1 className="text-2xl font-bold">{title}</h1>
+          {subtitle && <p className="mt-1 text-sm text-ink/70">{subtitle}</p>}
+          <div className="mt-6">{children}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+===== src\components\bits.jsx =====
+import { useCallback, useEffect, useState } from 'react'
+
+export const cx = (...a) => a.filter(Boolean).join(' ')
+
+export const STATUS = {
+  present: { label: 'Present', cls: 'bg-green-100 text-green-800' },
+  late: { label: 'Late', cls: 'bg-amber-100 text-amber-800' },
+  half_day: { label: 'Half day', cls: 'bg-orange-100 text-orange-800' },
+  absent: { label: 'Absent', cls: 'bg-red-100 text-red-800' },
+  leave: { label: 'On leave', cls: 'bg-blue-100 text-blue-800' },
+  holiday: { label: 'Holiday', cls: 'bg-purple-100 text-purple-800' },
+  weekend: { label: 'Weekend', cls: 'bg-gray-100 text-gray-500' },
+  upcoming: { label: 'Not yet', cls: 'bg-white text-gray-400' },
+  pending: { label: 'Pending', cls: 'bg-amber-100 text-amber-800' },
+  approved: { label: 'Approved', cls: 'bg-green-100 text-green-800' },
+  rejected: { label: 'Rejected', cls: 'bg-red-100 text-red-800' },
+  cancelled: { label: 'Cancelled', cls: 'bg-gray-100 text-gray-500' },
+}
+
+export function Badge({ status }) {
+  const s = STATUS[status]
+  if (!s) return <span className="text-gray-300">-</span>
+  return <span className={cx('inline-block rounded-full px-2.5 py-0.5 text-xs font-medium', s.cls)}>{s.label}</span>
+}
+
+export function Card({ title, right, className, children }) {
+  return (
+    <section className={cx('mb-5 rounded-2xl border border-sand bg-white p-5 shadow-card', className)}>
+      {(title || right) && (
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="font-display text-lg font-bold">{title}</h2>
+          {right}
+        </div>
+      )}
+      {children}
+    </section>
+  )
+}
+
+export function Btn({ variant = 'primary', className, ...p }) {
+  const base = 'rounded-full px-4 py-1.5 text-sm font-medium transition duration-150 active:scale-[0.98] disabled:opacity-50'
+  const v = {
+    primary: 'bg-pine-dark text-white hover:bg-pine',
+    ghost: 'border border-sand bg-white hover:bg-paper',
+    danger: 'bg-red-600 text-white hover:bg-red-700',
+  }[variant]
+  return <button className={cx(base, v, className)} {...p} />
+}
+
+export const inputCls =
+  'w-full rounded-xl border border-sand bg-white px-3 py-2 text-sm transition-colors hover:border-pine/50 focus:border-pine focus:outline-none focus:ring-2 focus:ring-pine/20'
+
+export function Field({ label, children }) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 block text-xs text-gray-600">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+export function Err({ error }) {
+  if (!error) return null
+  return (
+    <div role="alert" className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+      {error.message}
+      {error.errors?.length > 0 && (
+        <ul className="mt-1 list-disc pl-5">
+          {error.errors.map((e, i) => <li key={i}>{e.field ? `${e.field}: ` : ''}{e.message}</li>)}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// Grey shimmering placeholder shown while data loads.
+export const Skeleton = ({ className }) => <div className={cx('skeleton', className)} />
+
+export const fmtTime = (d) => (d ? new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-')
+export const fmtHours = (m) => (m ? `${Math.floor(m / 60)}h ${m % 60}m` : '-')
+export const currentMonth = () => new Date().toISOString().slice(0, 7)
+
+// Loads data on mount and whenever deps change. reload() refreshes.
+export function useLoad(fn, deps = []) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const run = useCallback(async () => {
+    setLoading(true)
+    try { setData(await fn()); setError(null) } catch (e) { setError(e) } finally { setLoading(false) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  useEffect(() => { run() }, [run])
+  return { data, error, loading, reload: run, setError }
+}
+
+
+===== src\components\charts.jsx =====
+import { Children, cloneElement, useEffect, useState } from 'react'
+import { cx } from './bits.jsx'
+
+// Counts a number up once when it appears (skipped if the user prefers reduced motion).
+function useCountUp(target, duration = 700) {
+  const [n, setN] = useState(typeof target === 'number' ? 0 : target)
+  useEffect(() => {
+    if (typeof target !== 'number' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setN(target)
+      return undefined
+    }
+    let raf
+    const t0 = performance.now()
+    const tick = (now) => {
+      const p = Math.min(1, (now - t0) / duration)
+      setN(target * (1 - Math.pow(1 - p, 3)))
+      if (p < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, duration])
+  return n
+}
+
+// Handles 12, "12%", "Rs 1,200". Anything else ("Unlimited", "-") is shown as is.
+const PARSE = /^(\D*?)(\d[\d,]*(?:\.\d+)?)(\D*)$/
+
+function AnimatedValue({ value }) {
+  const m = typeof value === 'string' ? PARSE.exec(value) : null
+  const target = typeof value === 'number' ? value : m ? Number(m[2].replace(/,/g, '')) : null
+  const decimals = m ? (m[2].split('.')[1] || '').length : typeof value === 'number' && !Number.isInteger(value) ? 2 : 0
+  const n = useCountUp(target)
+  if (target == null) return <>{value ?? '-'}</>
+  const text = Number(n).toLocaleString('en-PK', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+  return <>{m ? m[1] : ''}{text}{m ? m[3] : ''}</>
+}
+
+export const Kpi = ({ label, value, hint, tone, featured }) => (
+  <div
+    className={cx(
+      'rounded-2xl border p-4 shadow-card transition duration-200 hover:-translate-y-0.5 hover:shadow-lift',
+      featured ? 'border-pine-dark bg-pine-dark text-white' : 'border-sand bg-white'
+    )}
+  >
+    <div className={cx('text-sm', featured ? 'text-white/80' : 'text-ink/60')}>{label}</div>
+    <div className={cx('mt-3 font-display text-3xl font-bold tabular-nums', !featured && tone)}>
+      <AnimatedValue value={value} />
+    </div>
+    {hint && <div className={cx('mt-1 text-xs', featured ? 'text-white/70' : 'text-ink/50')}>{hint}</div>}
+  </div>
+)
+
+// The first card in each row is the dark green one.
+export const Kpis = ({ children }) => (
+  <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
+    {Children.toArray(children).map((c, i) => (i === 0 ? cloneElement(c, { featured: true }) : c))}
+  </div>
+)
+
+// Horizontal bars: rows = [{ label, value, note? }]
+export function BarRows({ rows, format = (v) => v, empty = 'No data in this range' }) {
+  if (!rows?.length) return <p className="py-4 text-sm text-gray-400">{empty}</p>
+  const max = Math.max(...rows.map((r) => r.value), 1)
+  return (
+    <ul className="space-y-3">
+      {rows.map((r, i) => (
+        <li key={r.label} className="text-sm">
+          <div className="flex justify-between gap-2">
+            <span className="truncate">{r.label}</span>
+            <span className="shrink-0 font-medium">{format(r.value)}{r.note && <span className="ml-1 text-xs font-normal text-gray-400">{r.note}</span>}</span>
+          </div>
+          <div className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-sand/60">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-pine to-mint"
+              style={{ width: `${(r.value / max) * 100}%`, transformOrigin: 'left', animation: `grow-x 0.6s ease-out ${i * 60}ms both` }}
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+const SEG = [['present', 'bg-green-500', 'Present'], ['late', 'bg-amber-500', 'Late'], ['half_day', 'bg-orange-400', 'Half day'], ['leave', 'bg-blue-400', 'On leave'], ['absent', 'bg-red-500', 'Absent']]
+
+// Stacked daily attendance bars
+export function TrendChart({ data }) {
+  if (!data?.length) return <p className="py-4 text-sm text-gray-400">No working days in this range yet</p>
+  const max = Math.max(...data.map((d) => SEG.reduce((a, [k]) => a + (d[k] || 0), 0)), 1)
+  return (
+    <div>
+      <div className="flex h-40 items-end gap-1 overflow-x-auto">
+        {data.map((d, i) => (
+          <div
+            key={d.date}
+            className="flex min-w-[14px] flex-1 flex-col-reverse overflow-hidden rounded-t-md"
+            style={{ transformOrigin: 'bottom', animation: `grow-y 0.55s ease-out ${Math.min(i, 30) * 25}ms both` }}
+            title={`${d.date}: ${SEG.map(([k, , l]) => `${l} ${d[k] || 0}`).join(', ')}`}
+          >
+            {SEG.map(([k, cls]) => d[k] > 0 && <div key={k} className={cls} style={{ height: `${(d[k] / max) * 160}px` }} />)}
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between text-[10px] text-gray-400"><span>{data[0].date}</span><span>{data[data.length - 1].date}</span></div>
+      <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-600">
+        {SEG.map(([k, cls, l]) => <span key={k} className="flex items-center gap-1"><i className={cx('inline-block h-2.5 w-2.5 rounded-sm', cls)} />{l}</span>)}
+      </div>
+    </div>
+  )
+}
+
+
+===== src\components\Confirm.jsx =====
+import { useCallback, useRef, useState } from 'react'
+import { Btn, Modal } from './ui.jsx'
+
+// Usage:
+//   const [confirm, confirmDialog] = useConfirm()
+//   if (!(await confirm({ title: 'Delete holiday?', message: '...', confirmLabel: 'Delete' }))) return
+//   ...and render {confirmDialog} once in the component's JSX.
+export function useConfirm() {
+  const [state, setState] = useState(null)
+  const resolver = useRef(null)
+
+  const ask = useCallback(
+    (opts) =>
+      new Promise((resolve) => {
+        resolver.current = resolve
+        setState(opts)
+      }),
+    []
+  )
+  const close = (answer) => {
+    resolver.current?.(answer)
+    resolver.current = null
+    setState(null)
+  }
+
+  const dialog = state && (
+    <Modal title={state.title || 'Are you sure?'} onClose={() => close(false)} size="sm">
+      <p className="text-sm text-ink/80">{state.message}</p>
+      <div className="mt-5 flex justify-end gap-2">
+        <Btn variant="ghost" autoFocus onClick={() => close(false)}>Cancel</Btn>
+        <Btn variant="dangerSolid" onClick={() => close(true)}>{state.confirmLabel || 'Delete'}</Btn>
+      </div>
+    </Modal>
+  )
+  return [ask, dialog]
+}
+
+
+===== src\components\FaceCapture.jsx =====
+import { useEffect, useRef, useState } from 'react'
+import { Btn } from './bits.jsx'
+
+// Opens the webcam, finds one face and returns its 128-number descriptor.
+// mode "enroll" takes 3 samples and averages them; "verify" takes 1.
+// Model files are served at /models (see vite.config.js).
+// Tries the local /models folder first, then falls back to public CDNs, so it works
+// even if the model files were never copied into the project.
+const MODEL_SOURCES = [
+  '/models',
+  'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model',
+  'https://vladmandic.github.io/face-api/model',
+]
+
+// A source is usable only if it returns real JSON (not the app's index.html).
+// Returns null when fine, otherwise a short reason.
+const checkSource = async (base) => {
+  try {
+    const r = await fetch(`${base}/tiny_face_detector_model-weights_manifest.json`)
+    if (!r.ok) return `file not found (HTTP ${r.status})`
+    JSON.parse(await r.text())
+    return null
+  } catch (e) { return `not reachable or not JSON (${e?.message || e})` }
+}
+
+let apiPromise
+const loadFaceApi = () => {
+  apiPromise ||= import('@vladmandic/face-api')
+    .then(async (faceapi) => {
+      const problems = []
+      for (const base of MODEL_SOURCES) {
+        const bad = await checkSource(base)
+        if (bad) { problems.push(`${base}: ${bad}`); continue }
+        try {
+          await faceapi.tf?.ready?.()
+          await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(base),
+            faceapi.nets.faceLandmark68Net.loadFromUri(base),
+            faceapi.nets.faceRecognitionNet.loadFromUri(base),
+          ])
+          return faceapi
+        } catch (e) { problems.push(`${base}: loading failed (${e?.message || e})`) }
+      }
+      throw new Error(`Face models could not be loaded. ${problems.join(' | ')}`)
+    })
+    .catch((e) => { apiPromise = undefined; throw e }) // allow a retry after a failure
+  return apiPromise
+}
+
+export default function FaceCapture({ mode = 'verify', onDone, onCancel }) {
+  const video = useRef(null)
+  const stream = useRef(null)
+  const [msg, setMsg] = useState('Starting camera...')
+  const [ready, setReady] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let dead = false
+    ;(async () => {
+      try {
+        const [faceapi, media] = await Promise.all([loadFaceApi(), navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 480 } })])
+        if (dead) return media.getTracks().forEach((t) => t.stop())
+        stream.current = media
+        video.current.srcObject = media
+        await video.current.play()
+        setReady(true)
+        setMsg('Look at the camera, then press Scan.')
+        video.current.faceapi = faceapi
+      } catch (e) {
+        setMsg(e?.name === 'NotAllowedError' ? 'Camera permission denied. Allow camera access and try again.' : `Could not start the camera or face models: ${e?.message || e}`)
+      }
+    })()
+    return () => { dead = true; stream.current?.getTracks().forEach((t) => t.stop()) }
+  }, [])
+
+  const sample = async () => {
+    const faceapi = video.current.faceapi
+    const found = await faceapi.detectAllFaces(video.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 })).withFaceLandmarks().withFaceDescriptors()
+    if (found.length === 0) throw new Error('No face found. Move closer and face the camera.')
+    if (found.length > 1) throw new Error('More than one face in view. Only one person please.')
+    return Array.from(found[0].descriptor)
+  }
+
+  const scan = async () => {
+    setBusy(true)
+    try {
+      const n = mode === 'enroll' ? 3 : 1
+      const all = []
+      for (let i = 0; i < n; i++) {
+        setMsg(n > 1 ? `Scanning ${i + 1} of ${n}...` : 'Scanning...')
+        all.push(await sample())
+        if (i < n - 1) await new Promise((r) => setTimeout(r, 500))
+      }
+      const avg = all[0].map((_, i) => all.reduce((s, d) => s + d[i], 0) / all.length)
+      stream.current?.getTracks().forEach((t) => t.stop())
+      onDone(avg)
+    } catch (e) {
+      setMsg(e.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mb-5 rounded-lg border border-sand bg-white p-4">
+      <div className="mb-2 text-sm font-medium">{mode === 'enroll' ? 'Register face' : 'Verify face'}</div>
+      <video ref={video} muted playsInline className="mb-3 aspect-[4/3] w-full max-w-sm rounded-md bg-black object-cover" style={{ transform: 'scaleX(-1)' }} />
+      <div className="mb-3 text-sm text-gray-600">{msg}</div>
+      <div className="flex gap-2">
+        <Btn disabled={!ready || busy} onClick={scan}>Scan</Btn>
+        <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+      </div>
+    </div>
+  )
+}
+
+
+===== src\components\Layout.jsx =====
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useAuth } from '../auth.jsx'
+import { cx } from './ui.jsx'
+import AiChat from './AiChat.jsx'
+import Notifications from './Notifications.jsx'
+
+// Simple stroke icons, one per menu item.
+const ICONS = {
+  home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
+  building: 'M4 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16M14 9h5a1 1 0 0 1 1 1v11M8 8h2M8 12h2M8 16h2M3 21h18',
+  tag: 'M20 12l-8 8-9-9V3h8l9 9zM7.5 7.5h.01',
+  lock: 'M6 11h12v9H6zM8 11V8a4 4 0 0 1 8 0v3',
+  users: 'M16 20v-1.5a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4V20M9.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M21 20v-1.5a4 4 0 0 0-3-3.9M16 4.2a3.5 3.5 0 0 1 0 6.6',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
+  inbox: 'M5 3h10l4 4v14H5zM14 3v5h5M9 14l2 2 4-4',
+  wallet: 'M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l2-3h12M16 14h2',
+  receipt: 'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6',
+  calendar: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',
+  settings: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M14 4v4M8 10v4M16 16v4',
+  megaphone: 'M3 11v2a1 1 0 0 0 1 1h3l8 4V6L7 10H4a1 1 0 0 0-1 1zM19 9a4 4 0 0 1 0 6',
+  shield: 'M9 3h6l1 2h3v16H5V5h3zM9 12h6M9 16h6',
+}
+
+function Icon({ name }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="shrink-0">
+      <path d={ICONS[name]} />
+    </svg>
+  )
+}
+
+const NAV = {
+  admin: [
+    ['/', 'Home', 'home'],
+    ['/departments', 'Departments', 'building'],
+    ['/designations', 'Designations', 'tag'],
+    ['/hr-users', 'HR logins', 'lock'],
+    ['/employees', 'Employees', 'users'],
+    ['/attendance-board', 'Attendance', 'clock'],
+    ['/leave-requests', 'Leave requests', 'inbox'],
+    ['/payroll', 'Payroll', 'wallet'],
+    ['/leave-setup', 'Leave and holidays', 'calendar'],
+    ['/settings', 'Settings', 'settings'],
+    ['/announcements', 'Announcements', 'megaphone'],
+    ['/audit', 'Audit log', 'shield'],
+  ],
+  hr: [
+    ['/', 'Home', 'home'],
+    ['/employees', 'Employees', 'users'],
+    ['/attendance-board', 'Attendance', 'clock'],
+    ['/leave-requests', 'Leave requests', 'inbox'],
+    ['/payroll', 'Payroll', 'wallet'],
+    ['/settings', 'Settings', 'settings'],
+    ['/announcements', 'Announcements', 'megaphone'],
+  ],
+  employee: [
+    ['/', 'Home', 'home'],
+    ['/me', 'My profile', 'user'],
+    ['/attendance', 'Attendance', 'clock'],
+    ['/leave', 'Leave', 'calendar'],
+    ['/payslips', 'Payslips', 'receipt'],
+    ['/announcements', 'Announcements', 'megaphone'],
+  ],
+}
+
+const initials = (name = '') => name.split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?'
+
+export default function Layout() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const items = NAV[user.role] || NAV.employee
+
+  return (
+    <div className="min-h-screen bg-paper md:flex">
+      <aside className="border-b border-sand bg-white md:sticky md:top-0 md:flex md:h-screen md:w-64 md:shrink-0 md:flex-col md:border-b-0 md:border-r">
+        <div className="flex items-center gap-3 px-5 py-4 md:py-6">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-pine-dark font-display text-lg font-bold text-white">H</span>
+          <div>
+            <div className="font-display text-xl font-bold leading-none">HCM-Lite</div>
+            <div className="mt-1 text-xs text-ink/50">People operations</div>
+          </div>
+        </div>
+        <nav className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-1 md:flex-col md:overflow-y-auto md:pb-6">
+          {items.map(([to, label, icon]) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              className={({ isActive }) =>
+                cx(
+                  'flex shrink-0 items-center gap-3 whitespace-nowrap rounded-full px-4 py-2.5 text-sm transition-colors',
+                  isActive ? 'bg-pine-dark font-medium text-white shadow-card' : 'text-ink/70 hover:bg-paper hover:text-ink'
+                )
+              }
+            >
+              <Icon name={icon} />
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="min-w-0 flex-1">
+        <header className="flex flex-wrap items-center justify-end gap-3 px-5 py-4 md:px-8">
+          <Notifications />
+          <div className="flex items-center gap-3 rounded-full border border-sand bg-white py-1.5 pl-1.5 pr-4 shadow-card">
+            <span className="grid h-9 w-9 place-items-center rounded-full bg-pine-dark text-sm font-semibold text-white">{initials(user.name)}</span>
+            <div className="leading-tight">
+              <div className="text-sm font-medium">{user.name}</div>
+              <div className="text-xs capitalize text-ink/50">{user.role}</div>
+            </div>
+          </div>
+          <button className="rounded-full border border-sand bg-white px-3.5 py-2 text-sm transition-colors hover:bg-paper" onClick={() => navigate('/change-password')}>
+            Change password
+          </button>
+          <button className="rounded-full border border-sand bg-white px-3.5 py-2 text-sm transition-colors hover:bg-paper" onClick={() => { logout(); navigate('/login') }}>
+            Sign out
+          </button>
+        </header>
+
+        <main className="mx-auto max-w-6xl px-5 pb-10 md:px-8">
+          <div key={pathname} className="anim-page"><Outlet /></div>
+        </main>
+        <AiChat role={user.role} />
+      </div>
+    </div>
+  )
+}
+
+
+===== src\components\Notifications.jsx =====
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { api } from '../api.js'
+
+export default function Notifications() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState({ unread: 0, items: [] })
+  const navigate = useNavigate()
+  const load = useCallback(async () => { try { setData(await api('/notifications')) } catch { /* ignore, bell is optional */ } }, [])
+
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30000)
+    return () => clearInterval(t)
+  }, [load])
+
+  const go = async (n) => {
+    if (!n.read) await api(`/notifications/${n.id}/read`, { method: 'PATCH', body: {} }).catch(() => {})
+    setOpen(false)
+    load()
+    if (n.link) navigate(n.link)
+  }
+  const readAll = async () => { await api('/notifications/read-all', { method: 'PATCH', body: {} }).catch(() => {}); load() }
+
+  return (
+    <div className="relative">
+      <button onClick={() => { setOpen(!open); load() }} className="relative rounded px-2 py-1 hover:bg-sand/60" aria-label="Notifications">
+        Notifications
+        {data.unread > 0 && <span className="ml-1 rounded-full bg-red-600 px-1.5 text-xs text-white">{data.unread}</span>}
+      </button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-2 w-80 max-w-[85vw] rounded-lg border border-sand bg-white shadow-xl">
+          <div className="flex items-center justify-between border-b border-sand px-3 py-2 text-xs">
+            <span className="font-medium">Notifications</span>
+            {data.unread > 0 && <button className="underline" onClick={readAll}>Mark all read</button>}
+          </div>
+          <ul className="max-h-80 overflow-y-auto">
+            {data.items.length === 0 && <li className="px-3 py-6 text-center text-sm text-gray-400">Nothing yet</li>}
+            {data.items.map((n) => (
+              <li key={n.id}>
+                <button onClick={() => go(n)} className={`block w-full border-b border-sand px-3 py-2 text-left text-sm hover:bg-sand/40 ${n.read ? '' : 'bg-amber/10'}`}>
+                  <div className="font-medium">{n.title}</div>
+                  <div className="text-gray-600">{n.message}</div>
+                  <div className="text-[11px] text-gray-400">{new Date(n.createdAt).toLocaleString()}</div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+===== src\components\Toast.jsx =====
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
+import { cx } from './bits.jsx'
+
+// Usage: const toast = useToast(); toast.success('Saved'); toast.error(err.message)
+const Ctx = createContext({ success: () => {}, error: () => {} })
+export const useToast = () => useContext(Ctx)
+
+export function ToastProvider({ children }) {
+  const [items, setItems] = useState([])
+  const nextId = useRef(0)
+
+  const dismiss = useCallback((id) => setItems((list) => list.filter((t) => t.id !== id)), [])
+  const push = useCallback(
+    (kind, message) => {
+      const id = ++nextId.current
+      setItems((list) => [...list.slice(-3), { id, kind, message }])
+      setTimeout(() => dismiss(id), kind === 'error' ? 5500 : 3200)
+    },
+    [dismiss]
+  )
+  const toast = useMemo(() => ({ success: (m) => push('success', m), error: (m) => push('error', m) }), [push])
+
+  return (
+    <Ctx.Provider value={toast}>
+      {children}
+      <div className="pointer-events-none fixed right-4 top-4 z-[60] flex w-[min(92vw,22rem)] flex-col gap-2">
+        {items.map((t) => (
+          <div
+            key={t.id}
+            role={t.kind === 'error' ? 'alert' : 'status'}
+            className={cx(
+              'anim-toast pointer-events-auto flex items-start gap-3 rounded-2xl border bg-white px-4 py-3 text-sm shadow-lift',
+              t.kind === 'error' ? 'border-red-200' : 'border-pine/20'
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className={cx(
+                'mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-xs font-bold text-white',
+                t.kind === 'error' ? 'bg-red-600' : 'bg-pine'
+              )}
+            >
+              {t.kind === 'error' ? '!' : '\u2713'}
+            </span>
+            <span className="min-w-0 flex-1 break-words">{t.message}</span>
+            <button onClick={() => dismiss(t.id)} aria-label="Dismiss" className="-mr-1 rounded px-1 text-lg leading-none text-ink/40 hover:text-ink">
+              &times;
+            </button>
+          </div>
+        ))}
+      </div>
+    </Ctx.Provider>
+  )
+}
+
+
+===== src\components\ui.jsx =====
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+
+export const cx = (...a) => a.filter(Boolean).join(' ')
+export const money = (n) => `Rs ${Number(n || 0).toLocaleString('en-PK')}`
+export const fieldErrors = (err) =>
+  Object.fromEntries((err?.errors || []).filter((e) => e.field).map((e) => [e.field, e.message]))
+
+export function Field({ label, error, as: As = 'input', children, ...p }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium">{label}</span>
+      <As
+        className={cx(
+          'w-full rounded-md border bg-white px-3 py-2 text-sm transition-colors',
+          error ? 'border-red-500' : 'border-sand hover:border-pine/50'
+        )}
+        {...p}
+      >
+        {children}
+      </As>
+      {error && <span className="mt-1 block text-xs text-red-700">{error}</span>}
+    </label>
+  )
+}
+
+export function Btn({ variant = 'primary', className, ...p }) {
+  const styles = {
+    primary: 'bg-pine text-white hover:bg-pine-dark disabled:opacity-50',
+    ghost: 'border border-sand bg-white hover:bg-sand/60 disabled:opacity-50',
+    danger: 'border border-red-300 bg-white text-red-700 hover:bg-red-50 disabled:opacity-50',
+  }
+  return (
+    <button
+      className={cx('rounded-md px-3.5 py-2 text-sm font-medium transition-colors', styles[variant], className)}
+      {...p}
+    />
+  )
+}
+
+export const Card = ({ className, ...p }) => (
+  <div className={cx('rounded-lg border border-sand bg-white', className)} {...p} />
+)
+
+export function Alert({ kind = 'error', children }) {
+  if (!children) return null
+  const s = kind === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber/30 bg-amber/10 text-amber'
+  return <div role="alert" className={cx('rounded-md border px-3 py-2 text-sm', s)}>{children}</div>
+}
+
+// The modal is rendered into document.body (portal), so parent layout such as "space-y-5"
+// can no longer push it down the page. It is always centred in the screen, the page behind
+// it does not scroll, and only the modal body scrolls when the content is taller than the screen.
+export function Modal({ title, onClose, footer, children }) {
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prev
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-3 sm:p-6">
+      <div role="dialog" aria-modal="true" className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+        <div className="flex shrink-0 items-center justify-between border-b border-sand px-5 py-3">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button onClick={onClose} aria-label="Close" className="rounded px-2 text-xl leading-none hover:bg-sand/60">&times;</button>
+        </div>
+        <div className="overflow-y-auto p-5">{children}</div>
+        {footer && <div className="flex shrink-0 justify-end gap-2 border-t border-sand bg-white px-5 py-3">{footer}</div>}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// The temporary password is shown once by the backend and never stored, so make it easy to copy.
+export function TempPassword({ title = 'Login created', email, password, onClose }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(password); setCopied(true) } catch { /* ignore */ }
+  }
+  return (
+    <Modal title={title} onClose={onClose}>
+      <p className="text-sm">Share these details with the user. The temporary password will not be shown again.</p>
+      <dl className="mt-3 space-y-2 rounded-md bg-paper p-3 text-sm">
+        <div><dt className="text-xs text-ink/60">Email</dt><dd className="font-medium">{email}</dd></div>
+        <div><dt className="text-xs text-ink/60">Temporary password</dt><dd className="font-mono text-base font-semibold">{password}</dd></div>
+      </dl>
+      <div className="mt-4 flex justify-end gap-2">
+        <Btn variant="ghost" onClick={copy}>{copied ? 'Copied' : 'Copy password'}</Btn>
+        <Btn onClick={onClose}>Done</Btn>
+      </div>
+    </Modal>
+  )
+}
+
+export const Empty = ({ children }) => <p className="px-4 py-8 text-center text-sm text-ink/60">{children}</p>
+
+
+===== src\pages\Announcements.jsx =====
+import { useState } from 'react'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import { Btn, Card, cx, Err, Field, inputCls, Skeleton, useLoad } from '../components/bits.jsx'
+import { useConfirm } from '../components/Confirm.jsx'
+import { useToast } from '../components/Toast.jsx'
+
+// Some endpoints return `id`, some `_id`. Accept both so delete never calls /announcements/undefined.
+const idOf = (a) => a.id ?? a._id
+
+const initial = (name = '') => (name.trim()[0] || '?').toUpperCase()
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+    </svg>
+  )
+}
+
+export default function Announcements() {
+  const { user } = useAuth()
+  const toast = useToast()
+  const [confirm, confirmDialog] = useConfirm()
+  const canPost = user.role === 'admin' || user.role === 'hr'
+  const canDelete = user.role === 'admin' // add `|| user.role === 'hr'` if the backend allows HR to delete too
+  const { data, error, loading, reload } = useLoad(() => api('/announcements'), [])
+  const [f, setF] = useState({ title: '', body: '' })
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [leaving, setLeaving] = useState(null)
+
+  const post = async (e) => {
+    e.preventDefault()
+    setBusy(true); setErr(null)
+    try {
+      await api('/announcements', { method: 'POST', body: f })
+      setF({ title: '', body: '' })
+      await reload()
+      toast.success('Announcement posted')
+    } catch (x) { setErr(x) } finally { setBusy(false) }
+  }
+
+  const remove = async (a) => {
+    const id = idOf(a)
+    if (!id) { toast.error('This announcement has no id, so it cannot be deleted.'); return }
+    const ok = await confirm({
+      title: 'Delete announcement?',
+      message: `"${a.title}" will be removed for everyone. This cannot be undone.`,
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
+    try {
+      await api(`/announcements/${id}`, { method: 'DELETE' })
+      setLeaving(id)
+      await new Promise((r) => setTimeout(r, 220)) // let the exit animation play
+      await reload()
+      toast.success('Announcement deleted')
+    } catch (x) {
+      toast.error(x.message)
+    } finally {
+      setLeaving(null)
+    }
+  }
+
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">Announcements</h1>
+      {canPost && (
+        <Card title="Post an announcement">
+          <form onSubmit={post} className="space-y-3">
+            <Field label="Title"><input required minLength="3" className={inputCls} value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
+            <Field label="Message"><textarea required minLength="3" rows="3" className={inputCls} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></Field>
+            <Err error={err} />
+            <Btn disabled={busy}>{busy ? 'Posting...' : 'Post'}</Btn>
+          </form>
+        </Card>
+      )}
+
+      <Card title="All announcements">
+        <Err error={error} />
+        {loading && !data && (
+          <div className="space-y-3"><Skeleton className="h-20" /><Skeleton className="h-20" /></div>
+        )}
+        {data?.length === 0 && (
+          <p className="py-6 text-center text-sm text-ink/60">
+            {canPost ? 'No announcements yet. Post the first one above.' : 'Nothing has been posted yet.'}
+          </p>
+        )}
+        <ul className="space-y-3">
+          {(data || []).map((a) => {
+            const id = idOf(a)
+            return (
+              <li key={id} className={cx('flex gap-3 rounded-xl border border-sand p-4 text-sm', leaving === id && 'anim-leave')}>
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-pine-dark text-sm font-semibold text-white" aria-hidden="true">{initial(a.authorName)}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">{a.title}</div>
+                  <div className="mt-0.5 whitespace-pre-wrap text-ink/80">{a.body}</div>
+                  <div className="mt-1.5 text-xs text-ink/50">{a.authorName} ({a.authorRole}) &middot; {new Date(a.createdAt).toLocaleString()}</div>
+                </div>
+                {canDelete && (
+                  <button
+                    onClick={() => remove(a)}
+                    aria-label={`Delete announcement ${a.title}`}
+                    title="Delete"
+                    className="h-9 w-9 shrink-0 place-items-center self-start rounded-full text-ink/40 transition-colors hover:bg-red-50 hover:text-red-600"
+                    style={{ display: 'grid' }}
+                  >
+                    <TrashIcon />
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      </Card>
+      {confirmDialog}
+    </div>
+  )
+}
+
+
+===== src\pages\Attendance.jsx =====
+import { useState } from 'react'
+import { api } from '../api.js'
+import FaceCapture from '../components/FaceCapture.jsx'
+import { Badge, Btn, Card, Err, Field, currentMonth, fmtHours, fmtTime, inputCls, useLoad } from '../components/bits.jsx'
+
+function getPosition() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve({})
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => resolve({}),
+      { timeout: 8000, enableHighAccuracy: true }
+    )
+  })
+}
+
+function Calendar({ days }) {
+  const offset = new Date(`${days[0].date}T00:00:00Z`).getUTCDay()
+  const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const color = { present: 'bg-green-100', late: 'bg-amber-100', half_day: 'bg-orange-100', absent: 'bg-red-100', leave: 'bg-blue-100', holiday: 'bg-purple-100', weekend: 'bg-gray-100' }
+  return (
+    <div className="grid grid-cols-7 gap-1 text-center text-xs">
+      {names.map((n) => <div key={n} className="py-1 font-medium text-gray-500">{n}</div>)}
+      {Array.from({ length: offset }).map((_, i) => <div key={`o${i}`} />)}
+      {days.map((d) => (
+        <div key={d.date} title={d.holiday || d.status || ''} className={`rounded p-1.5 ${color[d.status] || 'bg-white border border-sand'}`}>
+          <div className="font-medium">{Number(d.date.slice(8))}</div>
+          <div className="truncate text-[10px] text-gray-600">{d.status === 'upcoming' || !d.status ? '' : d.status.replace('_', ' ')}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export default function Attendance() {
+  const [month, setMonth] = useState(currentMonth())
+  const today = useLoad(() => api('/attendance/today'), [])
+  const cal = useLoad(() => api(`/attendance/me?month=${month}`), [month])
+  const corr = useLoad(() => api('/attendance/corrections'), [])
+  const face = useLoad(() => api('/attendance/face/status'), [])
+  const [camera, setCamera] = useState(null) // 'checkin' | 'checkout' | 'enroll'
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const [form, setForm] = useState({ date: '', checkIn: '09:00', checkOut: '18:00', reason: '' })
+
+  const act = async (fn) => {
+    setBusy(true); setErr(null)
+    try { await fn(); await Promise.all([today.reload(), cal.reload(), corr.reload()]) } catch (e) { setErr(e) } finally { setBusy(false) }
+  }
+  const doCheckIn = (descriptor) => act(async () => api('/attendance/check-in', { method: 'POST', body: { ...(await getPosition()), ...(descriptor ? { descriptor } : {}) } }))
+  const doCheckOut = (descriptor) => act(() => api('/attendance/check-out', { method: 'POST', body: descriptor ? { descriptor } : {} }))
+  const onFace = (descriptor) => {
+    const mode = camera
+    setCamera(null)
+    if (mode === 'checkin') doCheckIn(descriptor)
+    else if (mode === 'checkout') doCheckOut(descriptor)
+    else act(async () => { await api('/attendance/face/enroll', { method: 'POST', body: { descriptor } }); await face.reload() })
+  }
+  const enrolled = face.data?.enrolled
+  const submit = (e) => {
+    e.preventDefault()
+    act(async () => {
+      const body = { date: form.date, checkIn: form.checkIn, reason: form.reason }
+      if (form.checkOut) body.checkOut = form.checkOut
+      await api('/attendance/corrections', { method: 'POST', body })
+      setForm({ ...form, date: '', reason: '' })
+    })
+  }
+
+  const rec = today.data?.record
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">My attendance</h1>
+      <Err error={err} />
+      <Card title="Today">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="text-sm">
+            <div>Date: <b>{today.data?.date || '-'}</b></div>
+            <div>In: <b>{fmtTime(rec?.checkIn)}</b> &nbsp; Out: <b>{fmtTime(rec?.checkOut)}</b> &nbsp; {rec && <Badge status={rec.status} />}</div>
+            {rec?.checkOut && <div>Worked: <b>{fmtHours(rec.workedMinutes)}</b></div>}
+          </div>
+          <div className="ml-auto flex gap-2">
+            <Btn disabled={busy || !!rec || !!camera} onClick={() => (enrolled ? setCamera('checkin') : doCheckIn())}>Check in{enrolled ? ' with face' : ''}</Btn>
+            <Btn variant="ghost" disabled={busy || !rec || !!rec?.checkOut || !!camera} onClick={() => (enrolled ? setCamera('checkout') : doCheckOut())}>Check out</Btn>
+          </div>
+        </div>
+      </Card>
+
+      {camera && <FaceCapture mode={camera === 'enroll' ? 'enroll' : 'verify'} onDone={onFace} onCancel={() => setCamera(null)} />}
+      {face.data && !enrolled && !camera && (
+        <Card title="Face attendance">
+          <p className="mb-3 text-sm text-gray-600">Register your face once. After that, check-in and check-out need a face scan.</p>
+          <Btn disabled={busy} onClick={() => setCamera('enroll')}>Register my face</Btn>
+        </Card>
+      )}
+
+      <Card title="Calendar" right={<input type="month" className="rounded-md border border-sand px-2 py-1 text-sm" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} />}>
+        <Err error={cal.error} />
+        {cal.data && (
+          <>
+            <div className="mb-3 flex flex-wrap gap-3 text-sm">
+              {Object.entries(cal.data.summary).map(([k, v]) => <span key={k}><Badge status={k} /> <b>{v}</b></span>)}
+            </div>
+            <Calendar days={cal.data.days} />
+          </>
+        )}
+      </Card>
+
+      <Card title="Request a correction">
+        <form onSubmit={submit} className="grid gap-3 sm:grid-cols-4">
+          <Field label="Date"><input required type="date" className={inputCls} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
+          <Field label="Check-in"><input required type="time" className={inputCls} value={form.checkIn} onChange={(e) => setForm({ ...form, checkIn: e.target.value })} /></Field>
+          <Field label="Check-out"><input type="time" className={inputCls} value={form.checkOut} onChange={(e) => setForm({ ...form, checkOut: e.target.value })} /></Field>
+          <Field label="Reason"><input required className={inputCls} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
+          <div className="sm:col-span-4"><Btn disabled={busy}>Send request</Btn></div>
+        </form>
+      </Card>
+
+      <Card title="My correction requests">
+        <Err error={corr.error} />
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-xs text-gray-500"><th>Date</th><th>In</th><th>Out</th><th>Reason</th><th>Status</th></tr></thead>
+          <tbody>
+            {(corr.data || []).map((c) => (
+              <tr key={c._id} className="border-t border-sand"><td className="py-1.5">{c.date}</td><td>{c.checkIn}</td><td>{c.checkOut || '-'}</td><td>{c.reason}</td><td><Badge status={c.status} /></td></tr>
+            ))}
+            {corr.data?.length === 0 && <tr><td colSpan="5" className="py-3 text-gray-400">No requests yet</td></tr>}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  )
+}
+
+
+===== src\pages\AttendanceAdmin.jsx =====
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import FaceCapture from '../components/FaceCapture.jsx'
+import { Badge, Btn, Card, Err, fmtHours, fmtTime, useLoad } from '../components/bits.jsx'
+
+function Board() {
+  const [date, setDate] = useState('')
+  const { data, error } = useLoad(() => api(`/attendance/board${date ? `?date=${date}` : ''}`), [date])
+  return (
+    <Card title={`Daily board${data ? ` - ${data.date}` : ''}`} right={<input type="date" className="rounded-md border border-sand px-2 py-1 text-sm" value={date} onChange={(e) => setDate(e.target.value)} />}>
+      <Err error={error} />
+      {data?.holiday && <div className="mb-2 text-sm text-purple-700">Holiday: {data.holiday}</div>}
+      {data && (
+        <>
+          <div className="mb-3 flex flex-wrap gap-3 text-sm">
+            {Object.entries(data.summary).map(([k, v]) => <span key={k}>{k === 'not_yet' ? 'Not yet' : <Badge status={k} />} <b>{v}</b></span>)}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-xs text-gray-500"><th>Employee</th><th>Department</th><th>In</th><th>Out</th><th>Worked</th><th>Status</th></tr></thead>
+              <tbody>
+                {data.rows.map((r) => (
+                  <tr key={r.employeeId} className="border-t border-sand">
+                    <td className="py-1.5"><Link className="hover:underline" to={`/employees/${r.employeeId}`}>{r.name}</Link> <span className="text-xs text-gray-400">{r.employeeCode}</span></td>
+                    <td>{r.department}</td><td>{fmtTime(r.checkIn)}</td><td>{fmtTime(r.checkOut)}</td><td>{fmtHours(r.workedMinutes)}</td><td><Badge status={r.status} /></td>
+                  </tr>
+                ))}
+                {data.rows.length === 0 && <tr><td colSpan="6" className="py-3 text-gray-400">No active employees</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
+function FaceEnroll() {
+  const { data, error } = useLoad(() => api('/employees?limit=50&status=active'), [])
+  const [id, setId] = useState('')
+  const [open, setOpen] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [err, setErr] = useState(null)
+  const emps = data?.items || []
+  const pick = id || emps[0]?.id || emps[0]?._id || ''
+  const done = async (descriptor) => {
+    setOpen(false); setErr(null); setMsg(null)
+    try { await api(`/attendance/face/enroll/${pick}`, { method: 'POST', body: { descriptor } }); setMsg('Face registered.') } catch (e) { setErr(e) }
+  }
+  return (
+    <Card title="Face enrollment">
+      <Err error={error || err} />
+      {msg && <div className="mb-3 text-sm text-green-700">{msg}</div>}
+      {open ? <FaceCapture mode="enroll" onDone={done} onCancel={() => setOpen(false)} /> : (
+        <div className="flex flex-wrap items-end gap-3">
+          <select className="rounded-md border border-sand px-2 py-1.5 text-sm" value={pick} onChange={(e) => setId(e.target.value)}>
+            {emps.map((e) => <option key={e.id || e._id} value={e.id || e._id}>{e.name} ({e.employeeCode})</option>)}
+          </select>
+          <Btn disabled={!pick} onClick={() => setOpen(true)}>Register or replace face</Btn>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function Corrections() {
+  const { user } = useAuth()
+  const [status, setStatus] = useState('pending')
+  const { data, error, reload } = useLoad(() => api(`/attendance/corrections?status=${status}`), [status])
+  const [err, setErr] = useState(null)
+  const decide = async (id, what) => {
+    setErr(null)
+    try { await api(`/attendance/corrections/${id}/${what}`, { method: 'PATCH', body: {} }); reload() } catch (e) { setErr(e) }
+  }
+  return (
+    <Card title="Correction requests" right={
+      <select className="rounded-md border border-sand px-2 py-1 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option>
+      </select>}>
+      <Err error={error || err} />
+      <table className="w-full text-sm">
+        <thead><tr className="text-left text-xs text-gray-500"><th>Employee</th><th>Date</th><th>In</th><th>Out</th><th>Reason</th><th /></tr></thead>
+        <tbody>
+          {(data || []).map((c) => (
+            <tr key={c._id} className="border-t border-sand">
+              <td className="py-1.5">{c.employeeId?.name} <span className="text-xs text-gray-400">{c.employeeId?.employeeCode}</span></td>
+              <td>{c.date}</td><td>{c.checkIn}</td><td>{c.checkOut || '-'}</td><td>{c.reason}</td>
+              <td className="whitespace-nowrap text-right">
+                {c.status === 'pending' && user.role === 'hr' ? (
+                  <><Btn onClick={() => decide(c._id, 'approve')}>Approve</Btn> <Btn variant="danger" onClick={() => decide(c._id, 'reject')}>Reject</Btn></>
+                ) : <Badge status={c.status} />}
+              </td>
+            </tr>
+          ))}
+          {data?.length === 0 && <tr><td colSpan="6" className="py-3 text-gray-400">Nothing here</td></tr>}
+        </tbody>
+      </table>
+    </Card>
+  )
+}
+
+export default function AttendanceAdmin() {
+  const { user } = useAuth()
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">Attendance</h1>
+      <Board />
+      {user.role === 'hr' && <FaceEnroll />}
+      <Corrections />
+    </div>
+  )
+}
+
+
+===== src\pages\AuditLog.jsx =====
+import { Fragment, useState } from 'react'
+import { api } from '../api.js'
+import { Btn, Card, Err, inputCls, useLoad } from '../components/bits.jsx'
+
+export default function AuditLog() {
+  const [action, setAction] = useState('')
+  const [entity, setEntity] = useState('')
+  const [page, setPage] = useState(1)
+  const [open, setOpen] = useState(null)
+  const q = new URLSearchParams({ page, ...(action && { action }), ...(entity && { entity }) }).toString()
+  const { data, error, loading } = useLoad(() => api(`/audit?${q}`), [q])
+
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">Audit log</h1>
+      <Card title="Every important action" right={
+        <div className="flex gap-2 text-sm">
+          <input className={inputCls} placeholder="Action, e.g. payroll" value={action} onChange={(e) => { setPage(1); setAction(e.target.value) }} />
+          <select className={inputCls} value={entity} onChange={(e) => { setPage(1); setEntity(e.target.value) }}>
+            <option value="">All entities</option>
+            {['Employee', 'LeaveRequest', 'Attendance', 'AttendanceCorrection', 'PayrollRun', 'Settings', 'Announcement', 'User'].map((x) => <option key={x}>{x}</option>)}
+          </select>
+        </div>}>
+        <Err error={error} />
+        {loading && !data && <p className="text-sm text-gray-400">Loading...</p>}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-xs text-gray-500"><th>When</th><th>Who</th><th>Action</th><th>Entity</th><th /></tr></thead>
+            <tbody>
+              {(data?.items || []).map((a) => (
+                <Fragment key={a.id}>
+                  <tr className="border-t border-sand">
+                    <td className="whitespace-nowrap py-1.5">{new Date(a.at).toLocaleString()}</td>
+                    <td>{a.actor} <span className="text-xs text-gray-400">{a.actorRole}</span></td>
+                    <td className="font-medium">{a.action}</td><td>{a.entity}</td>
+                    <td className="text-right"><Btn variant="ghost" onClick={() => setOpen(open === a.id ? null : a.id)}>{open === a.id ? 'Hide' : 'Details'}</Btn></td>
+                  </tr>
+                  {open === a.id && (
+                    <tr className="bg-paper"><td colSpan="5" className="p-3">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div><div className="mb-1 text-xs font-medium text-gray-500">Before</div><pre className="max-h-60 overflow-auto rounded bg-white p-2 text-xs">{JSON.stringify(a.before, null, 2) ?? 'null'}</pre></div>
+                        <div><div className="mb-1 text-xs font-medium text-gray-500">After</div><pre className="max-h-60 overflow-auto rounded bg-white p-2 text-xs">{JSON.stringify(a.after, null, 2) ?? 'null'}</pre></div>
+                      </div>
+                    </td></tr>
+                  )}
+                </Fragment>
+              ))}
+              {data?.items.length === 0 && <tr><td colSpan="5" className="py-3 text-gray-400">No entries</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        {data && data.pages > 1 && (
+          <div className="mt-3 flex items-center gap-3 text-sm">
+            <Btn variant="ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Btn>
+            <span>Page {data.page} of {data.pages}</span>
+            <Btn variant="ghost" disabled={page >= data.pages} onClick={() => setPage(page + 1)}>Next</Btn>
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+
+===== src\pages\ChangePassword.jsx =====
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import AuthShell from '../components/AuthShell.jsx'
+import { Alert, Btn, Field, fieldErrors } from '../components/ui.jsx'
+
+export default function ChangePassword() {
+  const { user, apply } = useAuth()
+  const [f, setF] = useState({ currentPassword: '', newPassword: '', confirm: '' })
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const navigate = useNavigate()
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (f.newPassword !== f.confirm) return setErr({ message: 'The new passwords do not match.', errors: [] })
+    setBusy(true); setErr(null)
+    try {
+      const data = await api('/auth/change-password', {
+        method: 'POST',
+        body: { currentPassword: f.currentPassword, newPassword: f.newPassword },
+      })
+      apply(data)
+      navigate('/', { replace: true })
+    } catch (x) { setErr(x) } finally { setBusy(false) }
+  }
+  const fe = fieldErrors(err)
+
+  return (
+    <AuthShell
+      title="Change password"
+      subtitle={user.mustChangePassword ? 'You are using a temporary password. Choose a new one to continue.' : 'Choose a new password.'}
+    >
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="Current password" type="password" value={f.currentPassword} onChange={set('currentPassword')} error={fe.currentPassword} required />
+        <Field label="New password (8+ characters)" type="password" value={f.newPassword} onChange={set('newPassword')} error={fe.newPassword} required />
+        <Field label="Confirm new password" type="password" value={f.confirm} onChange={set('confirm')} required />
+        <Alert>{err && !Object.keys(fe).length ? err.message : null}</Alert>
+        <div className="flex gap-2">
+          <Btn className="flex-1" disabled={busy}>{busy ? 'Saving…' : 'Save password'}</Btn>
+          {!user.mustChangePassword && <Btn type="button" variant="ghost" onClick={() => navigate(-1)}>Cancel</Btn>}
+        </div>
+      </form>
+    </AuthShell>
+  )
+}
+
+
+===== src\pages\EmployeeDetail.jsx =====
+import { useEffect, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import { Alert, Btn, Card, Empty, Field, cx, fieldErrors, money } from '../components/ui.jsx'
+
+export const SalaryCards = ({ salary }) => (
+  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    {[['Basic', salary.basic], ['HRA (40%)', salary.hra], ['Medical (10%)', salary.medical], ['Gross', salary.gross]].map(([k, v]) => (
+      <Card key={k} className={cx('p-3', k === 'Gross' && 'border-pine bg-pine/5')}>
+        <div className="text-xs text-ink/60">{k}</div>
+        <div className="mt-1 font-display text-lg font-semibold">{money(v)}</div>
+      </Card>
+    ))}
+  </div>
+)
+
+export const Details = ({ e }) => (
+  <Card className="p-4">
+    <dl className="grid gap-4 text-sm sm:grid-cols-2">
+      {[['Employee code', e.employeeCode], ['Email', e.email], ['Department', e.department?.name], ['Designation', e.designation?.name],
+        ['Phone', e.phone || 'Not added'], ['Address', e.address || 'Not added'],
+        ['Joined', e.joiningDate ? new Date(e.joiningDate).toLocaleDateString() : '-'], ['Status', e.status]].map(([k, v]) => (
+        <div key={k}><dt className="text-xs text-ink/60">{k}</dt><dd className="font-medium">{v}</dd></div>
+      ))}
+    </dl>
+  </Card>
+)
+
+export default function EmployeeDetail() {
+  const { id } = useParams()
+  const { user } = useAuth()
+  const [e, setE] = useState(null)
+  const [basic, setBasic] = useState('')
+  const [err, setErr] = useState(null)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => { api(`/employees/${id}`).then((d) => { setE(d); setBasic(String(d.salary.basic)) }).catch(setErr) }, [id])
+
+  const patch = async (body) => {
+    setErr(null); setSaved(false)
+    try { const d = await api(`/employees/${id}`, { method: 'PATCH', body }); setE(d); setBasic(String(d.salary.basic)); setSaved(true) } catch (x) { setErr(x) }
+  }
+  const fe = fieldErrors(err)
+
+  if (!e) return err ? <Alert>{err.message}</Alert> : <Empty>Loading…</Empty>
+  return (
+    <div className="space-y-5">
+      <Link to="/employees" className="text-sm text-pine hover:underline">Back to employees</Link>
+      <h1 className="text-2xl font-bold">{e.name}</h1>
+      <Details e={e} />
+      <h2 className="text-lg font-semibold">Salary</h2>
+      <SalaryCards salary={e.salary} />
+      {user.role === 'hr' && (
+        <Card className="p-4">
+          <h2 className="mb-3 font-semibold">Manage</h2>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="w-48"><Field label="Basic salary (Rs)" type="number" min="0" value={basic} onChange={(x) => setBasic(x.target.value)} error={fe.basic} /></div>
+            <Btn variant="ghost" onClick={() => patch({ basic: Number(basic) })}>Update salary</Btn>
+            <Btn variant={e.status === 'active' ? 'danger' : 'ghost'} onClick={() => patch({ status: e.status === 'active' ? 'inactive' : 'active' })}>
+              {e.status === 'active' ? 'Deactivate employee' : 'Reactivate employee'}
+            </Btn>
+          </div>
+          <div className="mt-3"><Alert>{err && !Object.keys(fe).length ? err.message : null}</Alert></div>
+          {saved && <p className="mt-3 text-sm text-pine">Changes saved.</p>}
+        </Card>
+      )}
+    </div>
+  )
+}
+
+
+===== src\pages\Employees.jsx =====
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import { Alert, Btn, Card, Empty, Field, Modal, TempPassword, cx, fieldErrors } from '../components/ui.jsx'
+
+const blank = { name: '', email: '', phone: '', address: '', departmentId: '', designationId: '', joiningDate: '', basic: '' }
+
+function RegisterForm({ onDone, onClose }) {
+  const [f, setF] = useState(blank)
+  const [deps, setDeps] = useState([])
+  const [dess, setDess] = useState([])
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
+
+  useEffect(() => {
+    api('/departments').then(setDeps).catch(setErr)
+    api('/designations').then(setDess).catch(setErr)
+  }, [])
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setBusy(true); setErr(null)
+    const body = { name: f.name, email: f.email, departmentId: f.departmentId, designationId: f.designationId, basic: Number(f.basic) }
+    if (f.phone) body.phone = f.phone
+    if (f.address) body.address = f.address
+    if (f.joiningDate) body.joiningDate = f.joiningDate
+    try { onDone(await api('/employees', { method: 'POST', body })) } catch (x) { setErr(x) } finally { setBusy(false) }
+  }
+  const fe = fieldErrors(err)
+  const missing = deps.length === 0 || dess.length === 0
+
+  // The buttons live in the modal footer, which is always visible. They submit the form by its id.
+  const footer = (
+    <>
+      <Btn type="button" variant="ghost" onClick={onClose}>Cancel</Btn>
+      <Btn type="submit" form="register-employee-form" disabled={busy || missing}>{busy ? 'Saving...' : 'Save employee'}</Btn>
+    </>
+  )
+
+  return (
+    <Modal title="Register employee" onClose={onClose} footer={footer}>
+      {missing && <div className="mb-3"><Alert kind="warn">An Admin needs to add at least one department and one designation first.</Alert></div>}
+      <form id="register-employee-form" onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
+        <Field label="Full name" value={f.name} onChange={set('name')} error={fe.name} required />
+        <Field label="Email" type="email" value={f.email} onChange={set('email')} error={fe.email} required />
+        <Field as="select" label="Department" value={f.departmentId} onChange={set('departmentId')} error={fe.departmentId} required>
+          <option value="">Select...</option>
+          {deps.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </Field>
+        <Field as="select" label="Designation" value={f.designationId} onChange={set('designationId')} error={fe.designationId} required>
+          <option value="">Select...</option>
+          {dess.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </Field>
+        <Field label="Basic salary (Rs)" type="number" min="0" value={f.basic} onChange={set('basic')} error={fe.basic} required />
+        <Field label="Joining date" type="date" value={f.joiningDate} onChange={set('joiningDate')} error={fe.joiningDate} />
+        <Field label="Phone" value={f.phone} onChange={set('phone')} error={fe.phone} />
+        <Field label="Address" value={f.address} onChange={set('address')} error={fe.address} />
+        <div className="sm:col-span-2"><Alert>{err && !Object.keys(fe).length ? err.message : null}</Alert></div>
+        <p className="text-xs text-ink/60 sm:col-span-2">HRA (40%) and medical (10%) are added automatically, so gross pay is 1.5 x basic.</p>
+      </form>
+    </Modal>
+  )
+}
+
+export default function Employees() {
+  const { user } = useAuth()
+  const [q, setQ] = useState('')
+  const [status, setStatus] = useState('')
+  const [page, setPage] = useState(1)
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState(null)
+  const [reg, setReg] = useState(false)
+  const [shown, setShown] = useState(null)
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const p = new URLSearchParams({ page, limit: 10 })
+      if (q) p.set('q', q)
+      if (status) p.set('status', status)
+      api(`/employees?${p}`).then((d) => { setData(d); setErr(null) }).catch(setErr)
+    }, 250)
+    return () => clearTimeout(t)
+  }, [q, status, page, tick])
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Employees</h1>
+        {user.role === 'hr' && <Btn onClick={() => setReg(true)}>Register employee</Btn>}
+      </div>
+      <div className="flex flex-wrap gap-3">
+        <div className="w-full max-w-xs"><Field label="Search" placeholder="Name, email or code" value={q} onChange={(e) => { setQ(e.target.value); setPage(1) }} /></div>
+        <div className="w-40">
+          <Field as="select" label="Status" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }}>
+            <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
+          </Field>
+        </div>
+      </div>
+      <Alert>{err?.message}</Alert>
+      <Card className="overflow-x-auto">
+        {!data ? <Empty>Loading...</Empty> : data.items.length === 0 ? <Empty>No employees match. {user.role === 'hr' ? 'Register the first one with the button above.' : ''}</Empty> : (
+          <table className="w-full text-sm">
+            <thead className="border-b border-sand text-left text-ink/60">
+              <tr>{['Code', 'Name', 'Department', 'Designation', 'Status'].map((h) => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-sand">
+              {data.items.map((e) => (
+                <tr key={e.id} className="hover:bg-paper">
+                  <td className="px-4 py-3 whitespace-nowrap">{e.employeeCode}</td>
+                  <td className="px-4 py-3"><Link className="font-medium text-pine hover:underline" to={`/employees/${e.id}`}>{e.name}</Link><div className="text-xs text-ink/60">{e.email}</div></td>
+                  <td className="px-4 py-3">{e.department?.name}</td>
+                  <td className="px-4 py-3">{e.designation?.name}</td>
+                  <td className="px-4 py-3"><span className={cx('rounded px-1.5 py-0.5 text-xs', e.status === 'active' ? 'bg-pine/10 text-pine' : 'bg-sand')}>{e.status}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      {data && data.pages > 1 && (
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-ink/60">{data.total} employees, page {data.page} of {data.pages}</span>
+          <div className="flex gap-2">
+            <Btn variant="ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Btn>
+            <Btn variant="ghost" disabled={page >= data.pages} onClick={() => setPage(page + 1)}>Next</Btn>
+          </div>
+        </div>
+      )}
+      {reg && <RegisterForm onClose={() => setReg(false)} onDone={(r) => {
+        setReg(false); setTick(tick + 1)
+        setShown({ title: 'Employee registered', email: r.employee.email, password: r.temporaryPassword })
+      }} />}
+      {shown && <TempPassword {...shown} onClose={() => setShown(null)} />}
+    </div>
+  )
+}
+
+
+===== src\pages\Home.jsx =====
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import AnnouncementsCard from '../components/Announcements.jsx'
+import { Btn, Card, Err, fmtHours, fmtTime, inputCls, useLoad } from '../components/bits.jsx'
+import { BarRows, Kpi, Kpis, TrendChart } from '../components/charts.jsx'
+import { money } from '../components/ui.jsx'
+
+const today = () => new Date().toISOString().slice(0, 10)
+const monthStart = () => `${today().slice(0, 7)}-01`
+
+function Filters({ value, onChange, departments }) {
+  return (
+    <div className="mb-5 flex flex-wrap items-end gap-3 text-sm">
+      <label>From <input type="date" className={inputCls} value={value.from} onChange={(e) => onChange({ ...value, from: e.target.value })} /></label>
+      <label>To <input type="date" className={inputCls} value={value.to} onChange={(e) => onChange({ ...value, to: e.target.value })} /></label>
+      <label>Department
+        <select className={inputCls} value={value.departmentId} onChange={(e) => onChange({ ...value, departmentId: e.target.value })}>
+          <option value="">All departments</option>
+          {(departments || []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      </label>
+    </div>
+  )
+}
+
+const qs = (f) => new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString()
+
+function AiSummary({ scope, filters }) {
+  const [state, setState] = useState({ busy: false, bullets: null, error: null })
+  const run = async () => {
+    setState({ busy: true, bullets: null, error: null })
+    try {
+      const body = { scope, ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) }
+      const r = await api('/ai/summary', { method: 'POST', body })
+      setState({ busy: false, bullets: r.bullets, error: null })
+    } catch (e) { setState({ busy: false, bullets: null, error: e }) }
+  }
+  return (
+    <Card title="AI summary" right={<Btn onClick={run} disabled={state.busy}>{state.busy ? 'Summarizing...' : 'Summarize'}</Btn>}>
+      <Err error={state.error} />
+      {!state.bullets && !state.error && <p className="text-sm text-gray-400">Click Summarize for insights on the numbers above.</p>}
+      {state.bullets && (
+        <>
+          <ul className="list-disc space-y-1 pl-5 text-sm">{state.bullets.map((b, i) => <li key={i}>{b}</li>)}</ul>
+          <p className="mt-2 text-[11px] text-gray-400">AI-generated from the dashboard numbers for the current filters.</p>
+        </>
+      )}
+    </Card>
+  )
+}
+
+function HrDashboard({ role }) {
+  const [filters, setFilters] = useState({ from: monthStart(), to: today(), departmentId: '' })
+  const depts = useLoad(() => api('/departments'), [])
+  const { data, error, loading } = useLoad(() => api(`/dashboard/hr?${qs(filters)}`), [filters.from, filters.to, filters.departmentId])
+  const k = data?.kpis, a = data?.attendance
+  return (
+    <div>
+      <Filters value={filters} onChange={setFilters} departments={depts.data} />
+      <Err error={error} />
+      {loading && !data && <p className="text-sm text-gray-400">Loading dashboard...</p>}
+      {data && (
+        <>
+          <Kpis>
+            <Kpi label="Active headcount" value={k.headcount} />
+            <Kpi label="Checked in today" value={k.presentToday} />
+            <Kpi label="On leave today" value={k.onLeaveToday} />
+            <Kpi label="Late today" value={k.lateToday} tone={k.lateToday ? 'text-amber' : ''} />
+            <Kpi label="Pending approvals" value={k.pendingApprovals} hint={`${k.pendingLeaves} leave, ${k.pendingCorrections} corrections`} />
+          </Kpis>
+          <Kpis>
+            <Kpi label="Attendance rate" value={a.attendanceRatePercent == null ? '-' : `${a.attendanceRatePercent}%`} hint="in selected range" />
+            <Kpi label="Late %" value={a.latePercent == null ? '-' : `${a.latePercent}%`} hint="late / (present + late)" />
+            <Kpi label="Absenteeism" value={a.absenteeismPercent == null ? '-' : `${a.absenteeismPercent}%`} hint="absent / expected days" />
+            <Kpi label="Absent days" value={a.absentDays} />
+            <Kpi label="Late days" value={a.lateDays} />
+          </Kpis>
+          <div className="grid gap-5 lg:grid-cols-2">
+            <Card title="Attendance trend"><TrendChart data={data.trend} /></Card>
+            <Card title="Absenteeism by department">
+              <BarRows rows={data.absenteeismByDept.map((d) => ({ label: d.department, value: d.absenteeismPercent, note: `${d.absentDays}/${d.expectedDays} days` }))} format={(v) => `${v}%`} />
+            </Card>
+            <Card title="Approved leave by type (days)"><BarRows rows={data.leaveByType.map((l) => ({ label: l.name, value: l.days }))} /></Card>
+            <Card title="Top 5 late-comers">
+              <BarRows rows={data.topLateComers.map((l) => ({ label: `${l.name} (${l.employeeCode})`, value: l.lates, note: l.department }))} empty="Nobody was late in this range" />
+            </Card>
+          </div>
+          <AiSummary scope="hr" filters={filters} />
+        </>
+      )}
+    </div>
+  )
+}
+
+function AdminDashboard() {
+  const year = today().slice(0, 4)
+  const [filters, setFilters] = useState({ from: `${year}-01-01`, to: today(), departmentId: '' })
+  const depts = useLoad(() => api('/departments'), [])
+  const { data, error, loading } = useLoad(() => api(`/dashboard/admin?${qs(filters)}`), [filters.from, filters.to, filters.departmentId])
+  const k = data?.kpis
+  return (
+    <div>
+      <Filters value={filters} onChange={setFilters} departments={depts.data} />
+      <Err error={error} />
+      {loading && !data && <p className="text-sm text-gray-400">Loading dashboard...</p>}
+      {data && (
+        <>
+          <Kpis>
+            <Kpi label="Active headcount" value={k.headcount} />
+            <Kpi label="Attrition" value={`${k.attritionPercent}%`} hint={`${k.exits} exit(s) in range`} />
+            <Kpi label="Payroll cost (gross)" value={money(k.payrollCostGross)} hint={`${k.payrollMonths} finalized month(s)`} />
+            <Kpi label="Payroll cost (net)" value={money(k.payrollCostNet)} />
+            <Kpi label="Average salary (gross)" value={money(k.averageSalary)} />
+          </Kpis>
+          <div className="grid gap-5 lg:grid-cols-2">
+            <Card title="Headcount by department"><BarRows rows={data.headcountByDept.map((d) => ({ label: d.department, value: d.count }))} /></Card>
+            <Card title="Payroll cost by department (gross)">
+              <BarRows rows={data.payrollCostByDept.map((d) => ({ label: d.department, value: d.gross }))} format={money} empty="No finalized payroll in this range" />
+            </Card>
+            <Card title="Payroll by month (gross)">
+              <BarRows rows={data.payrollByMonth.map((m) => ({ label: m.month, value: m.gross }))} format={money} empty="No finalized payroll in this range" />
+            </Card>
+            <Card title="Tenure"><BarRows rows={data.tenure.map((t) => ({ label: t.bucket, value: t.count }))} /></Card>
+            <Card title="Average gross by department"><BarRows rows={data.averageSalaryByDept.map((d) => ({ label: d.department, value: d.averageGross, note: `${d.count} people` }))} format={money} /></Card>
+            <Card title="Average gross by designation"><BarRows rows={data.averageSalaryByDesignation.map((d) => ({ label: d.designation, value: d.averageGross, note: `${d.count} people` }))} format={money} /></Card>
+          </div>
+          <Card title="Latest activity" right={<Link to="/audit" className="text-sm underline">Open audit log</Link>}>
+            <ul className="divide-y divide-sand text-sm">
+              {data.auditFeed.length === 0 && <li className="py-2 text-gray-400">No activity yet</li>}
+              {data.auditFeed.map((a) => (
+                <li key={a.id} className="flex justify-between gap-3 py-1.5"><span><span className="font-medium">{a.action}</span> <span className="text-gray-400">{a.entity}</span></span><span className="text-xs text-gray-400">{a.actorRole} &middot; {new Date(a.at).toLocaleString()}</span></li>
+              ))}
+            </ul>
+          </Card>
+          <AiSummary scope="admin" filters={filters} />
+        </>
+      )}
+      <p className="mt-2 text-xs text-gray-400">Gender is not captured in the employee record, so it is not shown. Attrition is estimated from employees marked inactive in the range.</p>
+    </div>
+  )
+}
+
+function EmployeeDashboard() {
+  const { data, error, loading } = useLoad(() => api('/dashboard/me'), [])
+  const pct = data ? Math.min(100, Math.round((data.hoursThisWeek.minutes / data.hoursThisWeek.targetMinutes) * 100)) : 0
+  return (
+    <div>
+      <Err error={error} />
+      {loading && !data && <p className="text-sm text-gray-400">Loading dashboard...</p>}
+      {data && (
+        <>
+          <div className="grid gap-5 lg:grid-cols-2">
+            <Card title="Today" right={<Link to="/attendance" className="text-sm underline">Check in / out</Link>}>
+              {data.today ? (
+                <p className="text-sm">Checked in at <b>{fmtTime(data.today.checkIn)}</b> ({data.today.status.replace('_', ' ')}){data.today.checkOut ? <>, checked out at <b>{fmtTime(data.today.checkOut)}</b></> : ', not checked out yet'}.</p>
+              ) : <p className="text-sm text-gray-500">You have not checked in today.</p>}
+            </Card>
+            <Card title="Hours this week">
+              <div className="font-display text-2xl font-bold">{fmtHours(data.hoursThisWeek.minutes) === '-' ? '0h 0m' : fmtHours(data.hoursThisWeek.minutes)} <span className="text-sm font-normal text-gray-500">of 40h</span></div>
+              <div className="mt-2 h-2 rounded bg-sand/60"><div className="h-2 rounded bg-pine" style={{ width: `${pct}%` }} /></div>
+            </Card>
+          </div>
+          <Kpis>
+            <Kpi label="Late count (this month)" value={data.lateCountThisMonth} />
+            {data.leaveBalance.map((b) => <Kpi key={b.key} label={`${b.name} left`} value={b.remaining == null ? 'Unlimited' : b.remaining} hint={b.quota == null ? 'unpaid' : `of ${b.quota}`} />)}
+            <Kpi label="Last payslip" value={data.lastPayslip ? money(data.lastPayslip.net) : 'None yet'} hint={data.lastPayslip?.month} />
+          </Kpis>
+          <Card title="Ask my assistant" right={<Btn onClick={() => window.dispatchEvent(new Event('ai:open'))}>Open assistant</Btn>}>
+            <p className="text-sm text-gray-600">Ask about your leave balance, attendance or company policy. Need time off? <Link to="/leave" className="underline">Describe it in plain words</Link> and the form fills itself.</p>
+          </Card>
+        </>
+      )}
+    </div>
+  )
+}
+
+export default function Home() {
+  const { user } = useAuth()
+  return (
+    <div>
+      <h1 className="mb-1 font-display text-2xl font-bold">Welcome, {user.name.split(' ')[0]}</h1>
+      <p className="mb-5 text-sm text-ink/70">{user.role === 'admin' ? 'Company dashboard' : user.role === 'hr' ? 'HR dashboard' : 'Your dashboard'}</p>
+      {user.role === 'admin' && <AdminDashboard />}
+      {user.role === 'hr' && <HrDashboard />}
+      {user.role === 'employee' && <EmployeeDashboard />}
+      <div className="mt-5"><AnnouncementsCard /></div>
+    </div>
+  )
+}
+
+
+===== src\pages\HrUsers.jsx =====
+import { useCallback, useEffect, useState } from 'react'
+import { api } from '../api.js'
+import { Alert, Btn, Card, Empty, Field, TempPassword, cx, fieldErrors } from '../components/ui.jsx'
+
+export default function HrUsers() {
+  const [items, setItems] = useState(null)
+  const [f, setF] = useState({ name: '', email: '' })
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [shown, setShown] = useState(null)
+
+  const load = useCallback(() => api('/users?role=hr').then(setItems).catch(setErr), [])
+  useEffect(() => { load() }, [load])
+
+  const create = async (e) => {
+    e.preventDefault()
+    setBusy(true); setErr(null)
+    try {
+      const r = await api('/users/hr', { method: 'POST', body: f })
+      setShown({ title: 'HR login created', email: r.user?.email || f.email, password: r.temporaryPassword })
+      setF({ name: '', email: '' })
+      await load()
+    } catch (x) { setErr(x) } finally { setBusy(false) }
+  }
+  const toggle = async (u) => {
+    setErr(null)
+    try { await api(`/users/${u.id}/${u.isActive ? 'deactivate' : 'activate'}`, { method: 'PATCH' }); await load() } catch (x) { setErr(x) }
+  }
+  const reset = async (u) => {
+    if (!confirm(`Issue a new temporary password for ${u.email}?`)) return
+    setErr(null)
+    try {
+      const r = await api(`/users/${u.id}/reset-password`, { method: 'POST' })
+      setShown({ title: 'Password reset', email: u.email, password: r.temporaryPassword })
+    } catch (x) { setErr(x) }
+  }
+  const fe = fieldErrors(err)
+
+  return (
+    <div className="space-y-5">
+      <h1 className="text-2xl font-bold">HR logins</h1>
+      <Card className="p-4">
+        <form onSubmit={create} className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <Field label="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} error={fe.name} required />
+          <Field label="Email" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} error={fe.email} required />
+          <Btn disabled={busy}>Create HR login</Btn>
+        </form>
+      </Card>
+      <Alert>{err && !Object.keys(fe).length ? err.message : null}</Alert>
+      <Card className="overflow-x-auto">
+        {!items ? <Empty>Loading…</Empty> : items.length === 0 ? <Empty>No HR logins yet. Create the first one above.</Empty> : (
+          <table className="w-full text-sm">
+            <thead className="border-b border-sand text-left text-ink/60">
+              <tr><th className="px-4 py-2 font-medium">Name</th><th className="px-4 py-2 font-medium">Email</th><th className="px-4 py-2 font-medium">Status</th><th /></tr>
+            </thead>
+            <tbody className="divide-y divide-sand">
+              {items.map((u) => (
+                <tr key={u.id}>
+                  <td className="px-4 py-3 font-medium">{u.name}</td>
+                  <td className="px-4 py-3">{u.email}</td>
+                  <td className="px-4 py-3">
+                    <span className={cx('rounded px-1.5 py-0.5 text-xs', u.isActive ? 'bg-pine/10 text-pine' : 'bg-sand')}>{u.isActive ? 'Active' : 'Deactivated'}</span>
+                  </td>
+                  <td className="space-x-2 px-4 py-3 text-right whitespace-nowrap">
+                    <Btn variant="ghost" onClick={() => reset(u)}>Reset password</Btn>
+                    <Btn variant={u.isActive ? 'danger' : 'ghost'} onClick={() => toggle(u)}>{u.isActive ? 'Deactivate' : 'Activate'}</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      {shown && <TempPassword {...shown} onClose={() => setShown(null)} />}
+    </div>
+  )
+}
+
+
+===== src\pages\Leave.jsx =====
+import { useState } from 'react'
+import { api } from '../api.js'
+import { Badge, Btn, Card, Err, Field, inputCls, useLoad } from '../components/bits.jsx'
+
+export default function Leave() {
+  const bal = useLoad(() => api('/leaves/balance'), [])
+  const list = useLoad(() => api('/leaves'), [])
+  const [form, setForm] = useState({ leaveTypeKey: '', startDate: '', endDate: '', reason: '' })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const [smart, setSmart] = useState({ text: '', busy: false, msg: '' })
+
+  const refresh = () => Promise.all([bal.reload(), list.reload()])
+  const submit = async (e) => {
+    e.preventDefault()
+    setBusy(true); setErr(null)
+    try {
+      await api('/leaves', { method: 'POST', body: { ...form, leaveTypeKey: form.leaveTypeKey || bal.data?.[0]?.key } })
+      setForm({ ...form, startDate: '', endDate: '', reason: '' })
+      await refresh()
+    } catch (e2) { setErr(e2) } finally { setBusy(false) }
+  }
+  // Smart leave: the AI only fills the form. Nothing is saved until the employee presses Apply.
+  const fillFromText = async (e) => {
+    e.preventDefault()
+    setSmart({ ...smart, busy: true, msg: '' }); setErr(null)
+    try {
+      const r = await api('/ai/smart-leave', { method: 'POST', body: { text: smart.text } })
+      setForm({ leaveTypeKey: r.leaveTypeKey, startDate: r.startDate, endDate: r.endDate, reason: r.reason })
+      setSmart({ text: smart.text, busy: false, msg: 'AI-generated. Please check the form below and press Apply to confirm.' })
+    } catch (x) { setSmart({ ...smart, busy: false, msg: '' }); setErr(x) }
+  }
+  const cancel = async (id) => {
+    setErr(null)
+    try { await api(`/leaves/${id}/cancel`, { method: 'PATCH', body: {} }); await refresh() } catch (e) { setErr(e) }
+  }
+
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">My leave</h1>
+      <Err error={err || bal.error} />
+      <Card title="Balance (this year)">
+        <div className="grid gap-3 sm:grid-cols-4">
+          {(bal.data || []).map((b) => (
+            <div key={b.key} className="rounded-md border border-sand p-3 text-sm">
+              <div className="font-medium">{b.name}</div>
+              <div className="font-display text-2xl font-bold">{b.remaining == null ? 'Unlimited' : b.remaining}</div>
+              <div className="text-xs text-gray-500">{b.quota == null ? 'unpaid' : `of ${b.quota}`} &middot; used {b.used} &middot; pending {b.pending}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card title="Describe your leave in plain words">
+        <form onSubmit={fillFromText} className="flex flex-col gap-2 sm:flex-row">
+          <input className={inputCls} placeholder="e.g. Need next Monday and Tuesday off for my sister's wedding" value={smart.text} onChange={(e) => setSmart({ ...smart, text: e.target.value })} />
+          <Btn disabled={smart.busy || smart.text.trim().length < 3}>{smart.busy ? 'Reading...' : 'Fill the form'}</Btn>
+        </form>
+        {smart.msg && <p className="mt-2 text-xs text-amber">{smart.msg}</p>}
+      </Card>
+
+      <Card title="Apply for leave">
+        <form onSubmit={submit} className="grid gap-3 sm:grid-cols-4">
+          <Field label="Type">
+            <select className={inputCls} value={form.leaveTypeKey || bal.data?.[0]?.key || ''} onChange={(e) => setForm({ ...form, leaveTypeKey: e.target.value })}>
+              {(bal.data || []).map((b) => <option key={b.key} value={b.key}>{b.name}</option>)}
+            </select>
+          </Field>
+          <Field label="From"><input required type="date" className={inputCls} value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></Field>
+          <Field label="To"><input required type="date" className={inputCls} value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></Field>
+          <Field label="Reason"><input className={inputCls} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
+          <div className="sm:col-span-4"><Btn disabled={busy}>Apply</Btn></div>
+        </form>
+        <p className="mt-2 text-xs text-gray-500">Weekends and holidays are not counted.</p>
+      </Card>
+
+      <Card title="My requests">
+        <Err error={list.error} />
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-xs text-gray-500"><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Note</th><th /></tr></thead>
+          <tbody>
+            {(list.data || []).map((r) => (
+              <tr key={r._id} className="border-t border-sand">
+                <td className="py-1.5 capitalize">{r.leaveTypeKey}</td><td>{r.startDate}</td><td>{r.endDate}</td><td>{r.days}</td>
+                <td><Badge status={r.status} /></td><td>{r.note}</td>
+                <td className="text-right">{r.status === 'pending' && <Btn variant="ghost" onClick={() => cancel(r._id)}>Cancel</Btn>}</td>
+              </tr>
+            ))}
+            {list.data?.length === 0 && <tr><td colSpan="7" className="py-3 text-gray-400">No requests yet</td></tr>}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  )
+}
+
+
+===== src\pages\LeaveInbox.jsx =====
+import { useState } from 'react'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import { Badge, Btn, Card, Err, useLoad } from '../components/bits.jsx'
+
+export default function LeaveInbox() {
+  const { user } = useAuth()
+  const [status, setStatus] = useState('pending')
+  const { data, error, reload } = useLoad(() => api(`/leaves?status=${status}`), [status])
+  const [err, setErr] = useState(null)
+
+  const decide = async (id, what) => {
+    setErr(null)
+    const note = window.prompt(what === 'approve' ? 'Comment for the employee (optional)' : 'Reason for rejecting')
+    if (note === null) return
+    if (what === 'reject' && !note.trim()) { setErr({ message: 'Please give a reason when rejecting.' }); return }
+    try { await api(`/leaves/${id}/${what}`, { method: 'PATCH', body: { note } }); reload() } catch (e) { setErr(e) }
+  }
+
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">Leave requests</h1>
+      <Card title="Inbox" right={
+        <select className="rounded-md border border-sand px-2 py-1 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="cancelled">Cancelled</option>
+        </select>}>
+        <Err error={error || err} />
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-xs text-gray-500"><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th><th /></tr></thead>
+            <tbody>
+              {(data || []).map((r) => (
+                <tr key={r._id} className="border-t border-sand">
+                  <td className="py-1.5">{r.employeeId?.name} <span className="text-xs text-gray-400">{r.employeeId?.employeeCode}</span></td>
+                  <td className="capitalize">{r.leaveTypeKey}</td><td>{r.startDate}</td><td>{r.endDate}</td><td>{r.days}</td><td>{r.reason}</td>
+                  <td className="whitespace-nowrap text-right">
+                    {r.status === 'pending' && user.role === 'hr' ? (
+                      <><Btn onClick={() => decide(r._id, 'approve')}>Approve</Btn> <Btn variant="danger" onClick={() => decide(r._id, 'reject')}>Reject</Btn></>
+                    ) : <Badge status={r.status} />}
+                  </td>
+                </tr>
+              ))}
+              {data?.length === 0 && <tr><td colSpan="7" className="py-3 text-gray-400">Nothing here</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+
+===== src\pages\LeaveSetup.jsx =====
+import { useState } from 'react'
+import { api } from '../api.js'
+import { Btn, Card, Err, Field, inputCls, Skeleton, useLoad } from '../components/bits.jsx'
+import { useConfirm } from '../components/Confirm.jsx'
+import { useToast } from '../components/Toast.jsx'
+
+// Leave types and holidays come back with `id` (not `_id`). Accept both so we never call /holidays/undefined.
+const idOf = (x) => x.id ?? x._id
+
+// Runs an API action, refreshes the list, and reports the result as a toast.
+function useRun(reload, setErr) {
+  const toast = useToast()
+  return async (fn, successMessage) => {
+    setErr(null)
+    try {
+      await fn()
+      await reload()
+      if (successMessage) toast.success(successMessage)
+    } catch (e) {
+      setErr(e)
+      toast.error(e.message)
+    }
+  }
+}
+
+function LeaveTypes() {
+  const { data, error, loading, reload } = useLoad(() => api('/leave-types'), [])
+  const [err, setErr] = useState(null)
+  const [form, setForm] = useState({ key: '', name: '', yearlyQuota: '', paid: true })
+  const [confirm, confirmDialog] = useConfirm()
+  const run = useRun(reload, setErr)
+
+  const add = (e) => {
+    e.preventDefault()
+    run(async () => {
+      await api('/leave-types', { method: 'POST', body: { key: form.key.trim().toLowerCase(), name: form.name.trim(), yearlyQuota: form.yearlyQuota === '' ? null : Number(form.yearlyQuota), paid: form.paid } })
+      setForm({ key: '', name: '', yearlyQuota: '', paid: true })
+    }, 'Leave type added')
+  }
+  const editQuota = (t) => {
+    const v = window.prompt(`Yearly quota for ${t.name} (empty = unlimited)`, t.yearlyQuota ?? '')
+    if (v === null) return
+    run(() => api(`/leave-types/${idOf(t)}`, { method: 'PUT', body: { name: t.name, paid: t.paid, yearlyQuota: v.trim() === '' ? null : Number(v) } }), 'Quota updated')
+  }
+  const remove = async (t) => {
+    const ok = await confirm({ title: 'Delete leave type?', message: `${t.name} will be removed. This is blocked if leave requests already use it.`, confirmLabel: 'Delete' })
+    if (ok) run(() => api(`/leave-types/${idOf(t)}`, { method: 'DELETE' }), `${t.name} deleted`)
+  }
+
+  return (
+    <Card title="Leave types">
+      <Err error={error || err} />
+      {loading && !data && <Skeleton className="mb-4 h-24" />}
+      <div className="overflow-x-auto">
+        <table className="mb-4 w-full text-sm">
+          <thead><tr className="text-left text-xs text-gray-500"><th>Name</th><th>Key</th><th>Yearly quota</th><th>Paid</th><th /></tr></thead>
+          <tbody>
+            {(data || []).map((t) => (
+              <tr key={idOf(t)} className="border-t border-sand">
+                <td className="py-2">{t.name}</td><td>{t.key}</td><td>{t.yearlyQuota ?? 'Unlimited'}</td><td>{t.paid ? 'Yes' : 'No'}</td>
+                <td className="whitespace-nowrap text-right">
+                  <Btn variant="ghost" onClick={() => editQuota(t)}>Edit quota</Btn>{' '}
+                  <Btn variant="danger" onClick={() => remove(t)}>Delete</Btn>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <form onSubmit={add} className="grid gap-3 sm:grid-cols-5">
+        <Field label="Name"><input required className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
+        <Field label="Key (e.g. maternity)"><input required className={inputCls} value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} /></Field>
+        <Field label="Yearly quota"><input type="number" min="0" className={inputCls} placeholder="empty = unlimited" value={form.yearlyQuota} onChange={(e) => setForm({ ...form, yearlyQuota: e.target.value })} /></Field>
+        <Field label="Paid"><select className={inputCls} value={String(form.paid)} onChange={(e) => setForm({ ...form, paid: e.target.value === 'true' })}><option value="true">Yes</option><option value="false">No</option></select></Field>
+        <div className="flex items-end"><Btn>Add type</Btn></div>
+      </form>
+      {confirmDialog}
+    </Card>
+  )
+}
+
+function Holidays() {
+  const { data, error, loading, reload } = useLoad(() => api('/holidays'), [])
+  const [err, setErr] = useState(null)
+  const [form, setForm] = useState({ date: '', name: '' })
+  const [confirm, confirmDialog] = useConfirm()
+  const run = useRun(reload, setErr)
+
+  const add = (e) => {
+    e.preventDefault()
+    run(async () => {
+      await api('/holidays', { method: 'POST', body: { date: form.date, name: form.name.trim() } })
+      setForm({ date: '', name: '' })
+    }, 'Holiday added')
+  }
+  const remove = async (h) => {
+    const ok = await confirm({ title: 'Delete holiday?', message: `${h.name} (${h.date}) will be removed from the calendar.`, confirmLabel: 'Delete' })
+    if (ok) run(() => api(`/holidays/${idOf(h)}`, { method: 'DELETE' }), `${h.name} deleted`)
+  }
+
+  return (
+    <Card title="Holidays">
+      <Err error={error || err} />
+      <form onSubmit={add} className="mb-4 grid gap-3 sm:grid-cols-4">
+        <Field label="Date"><input required type="date" className={inputCls} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
+        <div className="sm:col-span-2"><Field label="Name"><input required className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field></div>
+        <div className="flex items-end"><Btn>Add holiday</Btn></div>
+      </form>
+      {loading && !data && <Skeleton className="h-24" />}
+      <table className="w-full text-sm">
+        <tbody>
+          {(data || []).map((h) => (
+            <tr key={idOf(h)} className="border-t border-sand">
+              <td className="py-2">{h.date}</td><td>{h.name}</td>
+              <td className="text-right"><Btn variant="danger" onClick={() => remove(h)}>Delete</Btn></td>
+            </tr>
+          ))}
+          {data?.length === 0 && <tr><td className="py-3 text-ink/60">No holidays yet. Add the first one above.</td></tr>}
+        </tbody>
+      </table>
+      {confirmDialog}
+    </Card>
+  )
+}
+
+export default function LeaveSetup() {
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">Leave types and holidays</h1>
+      <LeaveTypes />
+      <Holidays />
+    </div>
+  )
+}
+
+
+===== src\pages\Login.jsx =====
+import { useEffect, useState } from 'react'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import AuthShell from '../components/AuthShell.jsx'
+import { Alert, Btn, Field, fieldErrors } from '../components/ui.jsx'
+
+export default function Login() {
+  const { user, login } = useAuth()
+  const [f, setF] = useState({ email: '', password: '' })
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [needsSetup, setNeedsSetup] = useState(false)
+  const navigate = useNavigate()
+  const from = useLocation().state?.from || '/'
+
+  useEffect(() => {
+    api('/setup/status').then((s) => setNeedsSetup(s && s.setupCompleted === false)).catch(() => {})
+  }, [])
+
+  if (user) return <Navigate to={user.mustChangePassword ? '/change-password' : '/'} replace />
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setBusy(true); setErr(null)
+    try {
+      const u = await login(f.email, f.password)
+      navigate(u.mustChangePassword ? '/change-password' : from, { replace: true })
+    } catch (x) { setErr(x) } finally { setBusy(false) }
+  }
+  const fe = fieldErrors(err)
+
+  return (
+    <AuthShell title="Sign in" subtitle="Use the email and password your administrator gave you.">
+      {needsSetup && (
+        <div className="mb-4"><Alert kind="warn">No company exists yet. <Link className="font-medium underline" to="/setup">Run first-time setup</Link></Alert></div>
+      )}
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="Email" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} error={fe.email} required />
+        <Field label="Password" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} error={fe.password} required />
+        <Alert>{err && !Object.keys(fe).length ? err.message : null}</Alert>
+        <Btn className="w-full" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</Btn>
+      </form>
+    </AuthShell>
+  )
+}
+
+
+===== src\pages\MyProfile.jsx =====
+import { useEffect, useState } from 'react'
+import { api } from '../api.js'
+import { Alert, Btn, Card, Empty, Field, fieldErrors } from '../components/ui.jsx'
+import { Details, SalaryCards } from './EmployeeDetail.jsx'
+
+export default function MyProfile() {
+  const [e, setE] = useState(null)
+  const [f, setF] = useState({ phone: '', address: '' })
+  const [err, setErr] = useState(null)
+  const [saved, setSaved] = useState(false)
+
+  const fill = (d) => { setE(d); setF({ phone: d.phone || '', address: d.address || '' }) }
+  useEffect(() => { api('/employees/me').then(fill).catch(setErr) }, [])
+
+  const save = async (ev) => {
+    ev.preventDefault()
+    setErr(null); setSaved(false)
+    try { fill(await api('/employees/me', { method: 'PATCH', body: f })); setSaved(true) } catch (x) { setErr(x) }
+  }
+  const fe = fieldErrors(err)
+
+  if (!e) return err ? <Alert>{err.message}</Alert> : <Empty>Loading…</Empty>
+  return (
+    <div className="space-y-5">
+      <h1 className="text-2xl font-bold">My profile</h1>
+      <Details e={e} />
+      <h2 className="text-lg font-semibold">My salary</h2>
+      <SalaryCards salary={e.salary} />
+      <Card className="p-4">
+        <h2 className="mb-3 font-semibold">Contact details</h2>
+        <form onSubmit={save} className="grid gap-3 sm:grid-cols-2">
+          <Field label="Phone" value={f.phone} onChange={(x) => setF({ ...f, phone: x.target.value })} error={fe.phone} />
+          <Field label="Address" value={f.address} onChange={(x) => setF({ ...f, address: x.target.value })} error={fe.address} />
+          <div className="flex items-center gap-3 sm:col-span-2">
+            <Btn>Save contact details</Btn>
+            {saved && <span className="text-sm text-pine">Saved.</span>}
+          </div>
+          <div className="sm:col-span-2"><Alert>{err && !Object.keys(fe).length ? err.message : null}</Alert></div>
+        </form>
+      </Card>
+    </div>
+  )
+}
+
+
+===== src\pages\NamedList.jsx =====
+import { useCallback, useEffect, useState } from 'react'
+import { api } from '../api.js'
+import { Alert, Btn, Card, Empty, Field, fieldErrors } from '../components/ui.jsx'
+
+// Departments and designations are both a simple list of names.
+export default function NamedList({ title, path, noun }) {
+  const [items, setItems] = useState(null)
+  const [name, setName] = useState('')
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(() => api(path).then(setItems).catch(setErr), [path])
+  useEffect(() => { load() }, [load])
+
+  const add = async (e) => {
+    e.preventDefault()
+    setBusy(true); setErr(null)
+    try { await api(path, { method: 'POST', body: { name } }); setName(''); await load() }
+    catch (x) { setErr(x) } finally { setBusy(false) }
+  }
+  const remove = async (item) => {
+    if (!confirm(`Delete ${noun} "${item.name}"?`)) return
+    setErr(null)
+    try { await api(`${path}/${item.id}`, { method: 'DELETE' }); await load() } catch (x) { setErr(x) }
+  }
+  const fe = fieldErrors(err)
+
+  return (
+    <div className="space-y-5">
+      <h1 className="text-2xl font-bold">{title}</h1>
+      <form onSubmit={add} className="flex items-end gap-2">
+        <div className="max-w-xs flex-1"><Field label={`New ${noun}`} value={name} onChange={(e) => setName(e.target.value)} error={fe.name} required /></div>
+        <Btn disabled={busy}>Add {noun}</Btn>
+      </form>
+      <Alert>{err && !Object.keys(fe).length ? err.message : null}</Alert>
+      <Card>
+        {!items ? <Empty>Loading…</Empty> : items.length === 0 ? <Empty>No {noun}s yet. Add the first one above.</Empty> : (
+          <ul className="divide-y divide-sand">
+            {items.map((i) => (
+              <li key={i.id} className="flex items-center justify-between px-4 py-3 text-sm">
+                <span className="font-medium">{i.name}</span>
+                <Btn variant="danger" onClick={() => remove(i)}>Delete</Btn>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+
+===== src\pages\Payroll.jsx =====
+import { useState } from 'react'
+import { api, download } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import { Btn, Card, Err, currentMonth, inputCls, useLoad } from '../components/bits.jsx'
+import { money } from '../components/ui.jsx'
+
+export default function Payroll() {
+  const { user } = useAuth()
+  const [month, setMonth] = useState(currentMonth())
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const run = useLoad(async () => {
+    try { return await api(`/payroll/runs/${month}`) } catch (e) { if (e.status === 404) return null; throw e }
+  }, [month])
+  const runs = useLoad(() => api('/payroll/runs'), [])
+
+  const act = async (fn) => {
+    setBusy(true); setErr(null)
+    try { await fn(); await Promise.all([run.reload(), runs.reload()]) } catch (e) { setErr(e) } finally { setBusy(false) }
+  }
+  const draft = () => act(() => api('/payroll/runs', { method: 'POST', body: { month } }))
+  const finalize = () => {
+    if (!confirm(`Finalize ${month}? The month will be locked and nobody can change it.`)) return
+    return act(() => api(`/payroll/runs/${month}/finalize`, { method: 'POST', body: {} }))
+  }
+  const pdf = (i) => download(`/payroll/payslip/${month}?employeeId=${i.employeeId}`, `payslip-${i.employeeCode}-${month}.pdf`).catch(setErr)
+
+  const r = run.data
+  const locked = r?.status === 'finalized'
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">Payroll</h1>
+      <Card title="Monthly run" right={
+        <div className="flex flex-wrap items-center gap-2">
+          <input type="month" className={inputCls} value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} />
+          {user.role === 'hr' && <Btn onClick={draft} disabled={busy || locked}>{r ? 'Refresh draft' : 'Create draft'}</Btn>}
+          {user.role === 'admin' && <Btn onClick={finalize} disabled={busy || !r || locked}>Finalize and lock</Btn>}
+        </div>}>
+        <Err error={err || run.error} />
+        {runs.data?.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-2 text-xs">
+            {runs.data.map((x) => (
+              <button key={x.month} onClick={() => setMonth(x.month)} className={`rounded border px-2 py-1 ${x.month === month ? 'border-pine bg-pine/10' : 'border-sand'}`}>
+                {x.month} &middot; {x.status}
+              </button>
+            ))}
+          </div>
+        )}
+        {!r && !run.loading && <p className="text-sm text-gray-500">{user.role === 'hr' ? 'No payroll for this month yet. Click Create draft.' : 'HR has not created a draft for this month yet.'}</p>}
+        {r && (
+          <>
+            <p className={`mb-3 inline-block rounded px-2 py-0.5 text-xs font-medium ${locked ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
+              {locked ? `Finalized and locked ${new Date(r.finalizedAt).toLocaleDateString()}` : 'Draft, waiting for Admin to finalize'}
+            </p>
+            <div className="mb-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+              <div>Employees<div className="font-bold">{r.totals.employees}</div></div>
+              <div>Working days<div className="font-bold">{r.workingDays}</div></div>
+              <div>Gross<div className="font-bold">{money(r.totals.gross)}</div></div>
+              <div>Deductions + tax<div className="font-bold">{money(r.totals.deduction + r.totals.tax)}</div></div>
+              <div>Net pay<div className="font-bold">{money(r.totals.net)}</div></div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full whitespace-nowrap text-sm">
+                <thead><tr className="text-left text-xs text-gray-500"><th>Employee</th><th>Basic</th><th>Gross</th><th>Absent</th><th>Unpaid</th><th>Half</th><th>Deduction</th><th>Tax</th><th>Net</th><th /></tr></thead>
+                <tbody>
+                  {r.items.map((i) => (
+                    <tr key={i.employeeId} className="border-t border-sand">
+                      <td className="py-1.5">{i.name} <span className="text-xs text-gray-400">{i.employeeCode}</span>{i.eligibleDays !== i.workingDays && <span className="ml-1 rounded bg-sand px-1 text-[10px]">prorated {i.eligibleDays}/{i.workingDays}</span>}</td>
+                      <td>{money(i.basic)}</td><td>{money(i.earnedGross)}</td><td>{i.absentDays}</td><td>{i.unpaidLeaveDays}</td><td>{i.halfDays}</td>
+                      <td>{money(i.deduction)}</td><td>{money(i.tax)}</td><td className="font-medium">{money(i.net)}</td>
+                      <td><Btn variant="ghost" onClick={() => pdf(i)}>PDF</Btn></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-3 text-xs text-gray-400">Absent = past working day with no attendance record and no approved leave. Per day = gross / working days. Deduction = (absent + unpaid + 0.5 x half days) x per day. Joiners are prorated. Employees who have left are not prorated because the employee record has no exit date.</p>
+          </>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+
+===== src\pages\Payslips.jsx =====
+import { useState } from 'react'
+import { api, download } from '../api.js'
+import { Btn, Card, Err, useLoad } from '../components/bits.jsx'
+import { money } from '../components/ui.jsx'
+
+export default function Payslips() {
+  const { data, error, loading } = useLoad(() => api('/payroll/my'), [])
+  const [err, setErr] = useState(null)
+  const pdf = (p) => download(`/payroll/payslip/${p.month}`, `payslip-${p.month}.pdf`).catch(setErr)
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">My payslips</h1>
+      <Err error={err || error} />
+      {loading && <p className="text-sm text-gray-400">Loading...</p>}
+      {data?.length === 0 && <Card><p className="text-sm text-gray-500">No payslips yet. They appear here once Admin finalizes the month.</p></Card>}
+      {(data || []).map((p) => (
+        <Card key={p.month} title={p.month} right={<Btn onClick={() => pdf(p)}>Download PDF</Btn>}>
+          <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+            <div><dt className="text-xs text-gray-500">Gross</dt><dd className="font-medium">{money(p.earnedGross)}</dd></div>
+            <div><dt className="text-xs text-gray-500">Absent / unpaid days</dt><dd className="font-medium">{p.absentDays} / {p.unpaidLeaveDays}</dd></div>
+            <div><dt className="text-xs text-gray-500">Deduction</dt><dd className="font-medium">{money(p.deduction)}</dd></div>
+            <div><dt className="text-xs text-gray-500">Tax</dt><dd className="font-medium">{money(p.tax)}</dd></div>
+            <div><dt className="text-xs text-gray-500">Net pay</dt><dd className="font-display text-lg font-bold">{money(p.net)}</dd></div>
+          </dl>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+
+===== src\pages\Settings.jsx =====
+import { useEffect, useState } from 'react'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import { Btn, Card, Err, Field, inputCls, useLoad } from '../components/bits.jsx'
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const ZONES = (() => { try { return Intl.supportedValuesOf('timeZone') } catch { return ['UTC', 'Asia/Karachi'] } })()
+
+export default function Settings() {
+  const { user } = useAuth()
+  const canEdit = user.role === 'admin'
+  const { data, error, reload } = useLoad(() => api('/settings'), [])
+  const [f, setF] = useState(null)
+  const [err, setErr] = useState(null)
+  const [ok, setOk] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (data) setF({ companyName: data.companyName, timezone: data.timezone, officeStart: data.officeStart, graceMinutes: data.graceMinutes, halfDayHours: data.halfDayHours, weekend: data.weekend, lat: data.office?.lat ?? '', lng: data.office?.lng ?? '', radiusM: data.office?.radiusM ?? 150 })
+  }, [data])
+
+  if (!f) return <div><Err error={error} /><p className="text-sm text-gray-400">Loading settings...</p></div>
+  const set = (k, v) => { setOk(false); setF({ ...f, [k]: v }) }
+  const toggleDay = (d) => set('weekend', f.weekend.includes(d) ? f.weekend.filter((x) => x !== d) : [...f.weekend, d])
+  const here = () => navigator.geolocation?.getCurrentPosition((p) => setF({ ...f, lat: Number(p.coords.latitude.toFixed(6)), lng: Number(p.coords.longitude.toFixed(6)) }), () => setErr({ message: 'Could not read your location. Allow location access or type the numbers.' }), { enableHighAccuracy: true })
+
+  const save = async (e) => {
+    e.preventDefault()
+    setBusy(true); setErr(null); setOk(false)
+    const body = {
+      companyName: f.companyName, timezone: f.timezone, officeStart: f.officeStart,
+      graceMinutes: Number(f.graceMinutes), halfDayHours: Number(f.halfDayHours), weekend: f.weekend,
+      office: { radiusM: Number(f.radiusM), ...(f.lat !== '' && f.lng !== '' ? { lat: Number(f.lat), lng: Number(f.lng) } : {}) },
+    }
+    try { await api('/settings', { method: 'PUT', body }); setOk(true); await reload() } catch (x) { setErr(x) } finally { setBusy(false) }
+  }
+
+  return (
+    <div>
+      <h1 className="mb-4 font-display text-2xl font-bold">Company settings</h1>
+      <form onSubmit={save}>
+        <fieldset disabled={!canEdit || busy}>
+          <Card title="Company">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Company name"><input className={inputCls} value={f.companyName} onChange={(e) => set('companyName', e.target.value)} /></Field>
+              <Field label="Timezone (decides late and absent)">
+                <select className={inputCls} value={f.timezone} onChange={(e) => set('timezone', e.target.value)}>
+                  {(ZONES.includes(f.timezone) ? ZONES : [f.timezone, ...ZONES]).map((z) => <option key={z}>{z}</option>)}
+                </select>
+              </Field>
+            </div>
+          </Card>
+          <Card title="Office hours">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Office start"><input type="time" className={inputCls} value={f.officeStart} onChange={(e) => set('officeStart', e.target.value)} /></Field>
+              <Field label="Grace (minutes)"><input type="number" min="0" max="120" className={inputCls} value={f.graceMinutes} onChange={(e) => set('graceMinutes', e.target.value)} /></Field>
+              <Field label="Half day under (hours)"><input type="number" min="1" max="12" step="0.5" className={inputCls} value={f.halfDayHours} onChange={(e) => set('halfDayHours', e.target.value)} /></Field>
+            </div>
+            <div className="mt-3 text-sm">
+              <span className="mb-1 block text-xs text-gray-600">Weekend</span>
+              <div className="flex flex-wrap gap-3">{DAYS.map((d, i) => <label key={d} className="flex items-center gap-1"><input type="checkbox" checked={f.weekend.includes(i)} onChange={() => toggleDay(i)} />{d}</label>)}</div>
+            </div>
+          </Card>
+          <Card title="Office location (for camera attendance)">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Latitude"><input type="number" step="any" className={inputCls} value={f.lat} onChange={(e) => set('lat', e.target.value)} /></Field>
+              <Field label="Longitude"><input type="number" step="any" className={inputCls} value={f.lng} onChange={(e) => set('lng', e.target.value)} /></Field>
+              <Field label="Radius (metres)"><input type="number" min="10" max="5000" className={inputCls} value={f.radiusM} onChange={(e) => set('radiusM', e.target.value)} /></Field>
+            </div>
+            {canEdit && <Btn type="button" variant="ghost" className="mt-3" onClick={here}>Use my current location</Btn>}
+            <p className="mt-2 text-xs text-gray-500">Leave latitude and longitude empty to skip the location check.</p>
+          </Card>
+        </fieldset>
+        <Err error={err} />
+        {canEdit ? (
+          <div className="flex items-center gap-3"><Btn disabled={busy}>Save settings</Btn>{ok && <span className="text-sm text-green-700">Saved. Changes apply to new records only.</span>}</div>
+        ) : <p className="text-sm text-gray-500">Only Admin can change settings.</p>}
+      </form>
+    </div>
+  )
+}
+
+
+===== src\pages\Setup.jsx =====
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { api } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import AuthShell from '../components/AuthShell.jsx'
+import { Alert, Btn, Field, fieldErrors } from '../components/ui.jsx'
+
+export default function Setup() {
+  const [f, setF] = useState({ companyName: '', adminName: '', email: '', password: '' })
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const { login } = useAuth()
+  const navigate = useNavigate()
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
+
+  useEffect(() => {
+    api('/setup/status').then((s) => s?.setupCompleted && navigate('/login', { replace: true })).catch(() => {})
+  }, [navigate])
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setBusy(true); setErr(null)
+    try {
+      await api('/setup/first-run', { method: 'POST', body: f })
+      await login(f.email, f.password)
+      navigate('/', { replace: true })
+    } catch (x) { setErr(x) } finally { setBusy(false) }
+  }
+  const fe = fieldErrors(err)
+
+  return (
+    <AuthShell title="Set up your company" subtitle="Create the company and its Admin account. This only runs once.">
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="Company name" value={f.companyName} onChange={set('companyName')} error={fe.companyName} required />
+        <Field label="Admin name" value={f.adminName} onChange={set('adminName')} error={fe.adminName} required />
+        <Field label="Admin email" type="email" value={f.email} onChange={set('email')} error={fe.email} required />
+        <Field label="Password (8+ characters)" type="password" value={f.password} onChange={set('password')} error={fe.password} required />
+        <Alert>{err && !Object.keys(fe).length ? err.message : null}</Alert>
+        <Btn className="w-full" disabled={busy}>{busy ? 'Creating…' : 'Create company'}</Btn>
+      </form>
+    </AuthShell>
+  )
+}
+
