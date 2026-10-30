@@ -1,0 +1,2 @@
+name,email,departmentId,designationId,basic,phone,address,joiningDate
+Example Employee,example@company.com,REPLACE_WITH_DEPARTMENT_OBJECT_ID,REPLACE_WITH_DESIGNATION_OBJECT_ID,50000,03001234567,Karachi,2026-10-01

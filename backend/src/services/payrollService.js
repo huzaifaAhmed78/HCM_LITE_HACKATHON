@@ -24,8 +24,18 @@ export function annualTax(annual) {
 //  perDay    = gross / working days in the month
 //  deduction = (absent + unpaid + 0.5 x half days) x perDay
 //  joiners   = gross, deduction base and tax are prorated by eligibleDays / workingDays
-export function computePayslip({ basic, workingDays, eligibleDays, absentDays, unpaidLeaveDays, halfDays }) {
-  const { hra, medical, gross } = salaryOf(basic)
+export function computePayslip({ basic, workingDays, eligibleDays, absentDays, unpaidLeaveDays, halfDays, hraRatePercent = 40, medicalRatePercent = 10 }) {
+  const values = { basic, workingDays, eligibleDays, absentDays, unpaidLeaveDays, halfDays, hraRatePercent, medicalRatePercent }
+  for (const [field, value] of Object.entries(values)) {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new ApiError(422, `Invalid payroll value: ${field}`, [{ field, message: 'Must be a non-negative number' }])
+    }
+  }
+  if (eligibleDays > workingDays) throw new ApiError(422, 'Eligible days cannot exceed working days')
+  if (absentDays + unpaidLeaveDays + halfDays * 0.5 > eligibleDays) {
+    throw new ApiError(422, 'Attendance deductions exceed eligible working days')
+  }
+  const { hra, medical, gross } = salaryOf(basic, { hraRatePercent, medicalRatePercent })
   const perDay = workingDays > 0 ? gross / workingDays : 0
   const factor = workingDays > 0 ? eligibleDays / workingDays : 0
   const earnedGross = gross * factor
@@ -45,6 +55,9 @@ export async function createDraft(actor, month) {
   const existing = await PayrollRun.findOne({ month })
   if (existing?.status === 'finalized') throw new ApiError(409, `Payroll for ${month} is finalized and locked`)
 
+  const settings = await getSettings()
+  const hraRatePercent = Number.isFinite(settings.hraRatePercent) ? settings.hraRatePercent : 40
+  const medicalRatePercent = Number.isFinite(settings.medicalRatePercent) ? settings.medicalRatePercent : 10
   const { start, end } = monthRange(month)
   const employees = await Employee.find({ status: 'active' })
     .populate('departmentId', 'name').populate('designationId', 'name').sort({ employeeCode: 1 }).lean()
@@ -56,14 +69,14 @@ export async function createDraft(actor, month) {
     if (!s || s.eligibleDays === 0) continue // joined after this month
     const pay = computePayslip({
       basic: e.basic, workingDays: dates.length, eligibleDays: s.eligibleDays,
-      absentDays: s.absent, unpaidLeaveDays: s.unpaidLeaveDays, halfDays: s.half_day,
+      absentDays: s.absent, unpaidLeaveDays: s.unpaidLeaveDays, halfDays: s.half_day, hraRatePercent, medicalRatePercent,
     })
     items.push({
       employeeId: e._id, employeeCode: e.employeeCode, name: e.name,
       departmentId: e.departmentId?._id || null, department: e.departmentId?.name || '', designation: e.designationId?.name || '',
       joiningDate: e.joiningDate ? new Date(e.joiningDate).toISOString().slice(0, 10) : '',
       workingDays: dates.length, eligibleDays: s.eligibleDays,
-      absentDays: s.absent, unpaidLeaveDays: s.unpaidLeaveDays, halfDays: s.half_day,
+      absentDays: s.absent, unpaidLeaveDays: s.unpaidLeaveDays, halfDays: s.half_day, hraRatePercent, medicalRatePercent,
       ...pay,
     })
   }
@@ -79,7 +92,7 @@ export async function createDraft(actor, month) {
   const before = existing ? { status: existing.status, totals: existing.totals } : null
   const run = await PayrollRun.findOneAndUpdate(
     { month, status: 'draft' }, // a finalized run can never match this filter
-    { $set: { workingDays: dates.length, items, totals, createdBy: actor.id } },
+    { $set: { workingDays: dates.length, items, totals, createdBy: actor.id, calculationAssumptions: { hraRatePercent, medicalRatePercent, taxPolicy: 'Illustrative annual gross-income slabs applied to gross x 12; monthly tax prorated by eligible/working days.', deductionPolicy: 'Gross divided by working days; absent + unpaid leave + 0.5 per half-day.' } } },
     { upsert: true, new: true }
   )
   await logAudit({ actor, action: existing ? 'payroll.redraft' : 'payroll.draft', entity: 'PayrollRun', entityId: run._id, before, after: { month, status: 'draft', totals } })
@@ -152,7 +165,7 @@ export async function payslipPdf(actor, month, employeeId) {
   ]
   y = 684
   head('Earnings')
-  row('Basic', money(item.basic)); row('House rent allowance (40%)', money(item.hra)); row('Medical allowance (10%)', money(item.medical))
+  row('Basic', money(item.basic)); row(`House rent allowance (${run.calculationAssumptions?.hraRatePercent ?? 40}%)`, money(item.hra)); row(`Medical allowance (${run.calculationAssumptions?.medicalRatePercent ?? 10}%)`, money(item.medical))
   row('Gross (monthly)', money(item.gross), true)
   if (item.eligibleDays !== item.workingDays) row(`Prorated gross (${item.eligibleDays} of ${item.workingDays} working days)`, money(item.earnedGross), true)
   y -= 8
@@ -169,5 +182,6 @@ export async function payslipPdf(actor, month, employeeId) {
   y -= 40
   rows.push({ text: `Per day rate: ${money(item.perDay)}  |  Working days in month: ${item.workingDays}`, x: L, y, size: 8 })
   rows.push({ text: 'Computer generated payslip. Tax slab is illustrative.', x: L, y: y - 14, size: 8 })
+  rows.push({ text: `Assumptions: HRA ${run.calculationAssumptions?.hraRatePercent ?? 40}%, medical ${run.calculationAssumptions?.medicalRatePercent ?? 10}%; tax on annual gross slabs, prorated for eligible days.`, x: L, y: y - 26, size: 7 })
   return { pdf: buildPdf([...items, ...rows]), filename: `payslip-${item.employeeCode}-${month}.pdf` }
 }

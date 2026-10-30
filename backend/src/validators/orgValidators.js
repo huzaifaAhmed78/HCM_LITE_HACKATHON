@@ -26,6 +26,8 @@ export const settingsUpdate = z.object({
   officeStart: hhmm,
   graceMinutes: z.number().int().min(0).max(120),
   halfDayHours: z.number().min(1).max(12),
+  hraRatePercent: z.number().min(0).max(200),
+  medicalRatePercent: z.number().min(0).max(200),
   weekend: z.array(z.number().int().min(0).max(6)).max(6).refine((a) => new Set(a).size === a.length, 'Duplicate days'),
   office: z.object({
     lat: z.number().min(-90).max(90),

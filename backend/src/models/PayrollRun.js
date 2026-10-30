@@ -32,6 +32,12 @@ const schema = new mongoose.Schema(
     month: { type: String, required: true, unique: true }, // YYYY-MM
     status: { type: String, enum: ['draft', 'finalized'], default: 'draft' },
     workingDays: { type: Number, default: 0 },
+    calculationAssumptions: {
+      hraRatePercent: { type: Number, default: 40 },
+      medicalRatePercent: { type: Number, default: 10 },
+      taxPolicy: { type: String, default: 'Illustrative annual gross-income slabs; monthly tax prorated by eligible/working days.' },
+      deductionPolicy: { type: String, default: 'Gross divided by working days; absent + unpaid leave + 0.5 per half-day.' },
+    },
     items: [itemSchema],
     totals: {
       employees: { type: Number, default: 0 },

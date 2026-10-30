@@ -31,3 +31,16 @@ test('joiner is prorated', () => {
   assert.equal(p.tax, 5000)
   assert.equal(p.net, 70000)
 })
+
+test('rejects invalid payroll inputs instead of calculating misleading pay', () => {
+  assert.throws(() => computePayslip({ basic: -1, workingDays: 20, eligibleDays: 20, absentDays: 0, unpaidLeaveDays: 0, halfDays: 0 }), /Invalid payroll value/)
+  assert.throws(() => computePayslip({ basic: 100000, workingDays: 20, eligibleDays: 21, absentDays: 0, unpaidLeaveDays: 0, halfDays: 0 }), /Eligible days cannot exceed working days/)
+  assert.throws(() => computePayslip({ basic: 100000, workingDays: 20, eligibleDays: 2, absentDays: 3, unpaidLeaveDays: 0, halfDays: 0 }), /deductions exceed/)
+})
+
+test('configured allowance percentages change gross consistently', () => {
+  const p = computePayslip({ basic: 100000, workingDays: 20, eligibleDays: 20, absentDays: 0, unpaidLeaveDays: 0, halfDays: 0, hraRatePercent: 25, medicalRatePercent: 8 })
+  assert.equal(p.hra, 25000)
+  assert.equal(p.medical, 8000)
+  assert.equal(p.gross, 133000)
+})

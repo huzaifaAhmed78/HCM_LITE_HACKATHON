@@ -16,7 +16,7 @@ export default function Settings() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (data) setF({ companyName: data.companyName, timezone: data.timezone, officeStart: data.officeStart, graceMinutes: data.graceMinutes, halfDayHours: data.halfDayHours, weekend: data.weekend, lat: data.office?.lat ?? '', lng: data.office?.lng ?? '', radiusM: data.office?.radiusM ?? 150 })
+    if (data) setF({ companyName: data.companyName, timezone: data.timezone, officeStart: data.officeStart, graceMinutes: data.graceMinutes, halfDayHours: data.halfDayHours, hraRatePercent: data.hraRatePercent ?? 40, medicalRatePercent: data.medicalRatePercent ?? 10, weekend: data.weekend, lat: data.office?.lat ?? '', lng: data.office?.lng ?? '', radiusM: data.office?.radiusM ?? 150 })
   }, [data])
 
   if (!f) return <div><Err error={error} /><p className="text-sm text-ink/50">Loading settings...</p></div>
@@ -29,7 +29,7 @@ export default function Settings() {
     setBusy(true); setErr(null); setOk(false)
     const body = {
       companyName: f.companyName, timezone: f.timezone, officeStart: f.officeStart,
-      graceMinutes: Number(f.graceMinutes), halfDayHours: Number(f.halfDayHours), weekend: f.weekend,
+      graceMinutes: Number(f.graceMinutes), halfDayHours: Number(f.halfDayHours), hraRatePercent: Number(f.hraRatePercent), medicalRatePercent: Number(f.medicalRatePercent), weekend: f.weekend,
       office: { radiusM: Number(f.radiusM), ...(f.lat !== '' && f.lng !== '' ? { lat: Number(f.lat), lng: Number(f.lng) } : {}) },
     }
     try { await api('/settings', { method: 'PUT', body }); setOk(true); await reload() } catch (x) { setErr(x) } finally { setBusy(false) }
@@ -48,6 +48,13 @@ export default function Settings() {
                   {(ZONES.includes(f.timezone) ? ZONES : [f.timezone, ...ZONES]).map((z) => <option key={z}>{z}</option>)}
                 </select>
               </Field>
+            </div>
+          </Card>
+          <Card title="Payroll allowances">
+            <p className="mb-3 text-sm text-ink/70">Admin can configure allowance percentages applied to basic salary. Rates are snapshotted into each new payroll draft; finalized payroll remains unchanged.</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="House rent allowance (% of basic)"><input type="number" min="0" max="200" step="0.5" className={inputCls} value={f.hraRatePercent} onChange={(e) => set('hraRatePercent', e.target.value)} /></Field>
+              <Field label="Medical allowance (% of basic)"><input type="number" min="0" max="200" step="0.5" className={inputCls} value={f.medicalRatePercent} onChange={(e) => set('medicalRatePercent', e.target.value)} /></Field>
             </div>
           </Card>
           <Card title="Office hours">

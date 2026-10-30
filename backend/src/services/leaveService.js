@@ -94,6 +94,7 @@ export async function cancel(actor, id) {
   req.status = 'cancelled'
   await req.save()
   await logAudit({ actor, action: 'leave.cancel', entity: 'LeaveRequest', entityId: req._id, before, after: req.toObject() })
+  await notifyRole('hr', { title: 'Leave request cancelled', message: `${actor.name} cancelled the pending ${req.leaveTypeKey} leave request (${req.startDate} to ${req.endDate}).`, link: '/leave-requests' })
   return req
 }
 

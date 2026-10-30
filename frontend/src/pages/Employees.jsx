@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api.js'
+import { api, download } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { Alert, Btn, Card, Empty, Field, Modal, TempPassword, cx, fieldErrors } from '../components/ui.jsx'
 
@@ -74,6 +74,11 @@ export default function Employees() {
   const [reg, setReg] = useState(false)
   const [shown, setShown] = useState(null)
   const [tick, setTick] = useState(0)
+  const [csvText, setCsvText] = useState('')
+  const [csvName, setCsvName] = useState('')
+  const [csvResult, setCsvResult] = useState(null)
+  const [csvBusy, setCsvBusy] = useState(false)
+  const [csvErr, setCsvErr] = useState('')
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -89,8 +94,46 @@ export default function Employees() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Employees</h1>
-        {user.role === 'hr' && <Btn onClick={() => setReg(true)}>Register employee</Btn>}
+        <div className="flex flex-wrap gap-2">
+          {['hr', 'admin'].includes(user.role) && <Btn variant="ghost" onClick={() => download('/employees/export.csv', 'employees.csv').catch((e) => setErr(e))}>Export CSV</Btn>}
+          {user.role === 'hr' && <Btn variant="ghost" onClick={() => { setCsvResult(null); setCsvErr(''); document.getElementById('employee-csv-file')?.click() }}>Import CSV</Btn>}
+          {user.role === 'hr' && <Btn onClick={() => setReg(true)}>Register employee</Btn>}
+        </div>
       </div>
+      {user.role === 'hr' && <input id="employee-csv-file" type="file" accept=".csv,text/csv" className="hidden" onChange={async (e) => {
+        const file = e.target.files?.[0]
+        e.target.value = ''
+        if (!file) return
+        if (file.size > 2 * 1024 * 1024) { setCsvErr('CSV must be smaller than 2 MB.'); return }
+        try {
+          setCsvText(await file.text()); setCsvName(file.name); setCsvResult(null); setCsvErr('')
+        } catch { setCsvErr('Could not read the selected file.') }
+      }} />}
+      {user.role === 'hr' && csvText && <Card className="space-y-3">
+        <h2 className="font-semibold">Import employees: {csvName}</h2>
+        <p className="text-sm text-ink/70">Required columns: name, email, departmentId, designationId, basic. Optional: phone, address, joiningDate. Run validation first. Valid rows can be imported even when other rows have errors; invalid rows will be skipped and reported.</p>
+        <div className="flex flex-wrap gap-2">
+          <Btn disabled={csvBusy} onClick={async () => {
+            setCsvBusy(true); setCsvErr(''); setCsvResult(null)
+            try { setCsvResult(await api('/employees/import.csv', { method: 'POST', body: { csv: csvText, dryRun: true } })) }
+            catch (e) { setCsvErr(e.message) } finally { setCsvBusy(false) }
+          }}>{csvBusy ? 'Checking...' : 'Validate CSV'}</Btn>
+          <Btn disabled={csvBusy || !csvResult || csvResult.validRows === 0} onClick={async () => {
+            setCsvBusy(true); setCsvErr('')
+            try {
+              const result = await api('/employees/import.csv', { method: 'POST', body: { csv: csvText, dryRun: false } })
+              setCsvResult(result); setCsvText(''); setTick((n) => n + 1)
+            } catch (e) { setCsvErr(e.message) } finally { setCsvBusy(false) }
+          }}>Import valid rows</Btn>
+          <Btn variant="ghost" disabled={csvBusy} onClick={() => { setCsvText(''); setCsvName(''); setCsvResult(null); setCsvErr('') }}>Cancel</Btn>
+        </div>
+        {csvErr && <Alert>{csvErr}</Alert>}
+        {csvResult && <div className="space-y-2 text-sm">
+          <p>{csvResult.dryRun ? 'Validation complete' : 'Import complete'} — {csvResult.totalRows} rows, {csvResult.dryRun ? `${csvResult.validRows} valid` : `${csvResult.importedRows} imported`}, {csvResult.errorRows} errors.</p>
+          {csvResult.errors?.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left"><thead><tr><th className="p-2">CSV row</th><th className="p-2">Email</th><th className="p-2">Errors</th></tr></thead><tbody>{csvResult.errors.map((x) => <tr key={`${x.row}-${x.email}`} className="border-t"><td className="p-2">{x.row}</td><td className="p-2">{x.email}</td><td className="p-2">{x.errors.join('; ')}</td></tr>)}</tbody></table></div>}
+          {!csvResult.dryRun && csvResult.imported?.length > 0 && <p className="text-amber-700">Temporary passwords were generated. Download/save them securely now; they are shown only in this response.</p>}
+        </div>}
+      </Card>}
       <div className="flex flex-wrap gap-3">
         <div className="w-full max-w-xs"><Field label="Search" placeholder="Name, email or code" value={q} onChange={(e) => { setQ(e.target.value); setPage(1) }} /></div>
         <div className="w-40">

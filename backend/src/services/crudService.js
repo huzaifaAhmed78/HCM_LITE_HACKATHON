@@ -2,6 +2,8 @@ import mongoose from 'mongoose'
 import { ApiError } from '../utils/ApiError.js'
 import { docView } from '../views/docView.js'
 import { logAudit } from './auditService.js'
+import { Department } from '../models/Department.js'
+import { Designation } from '../models/Designation.js'
 
 // Small shared CRUD for simple setup lists (departments, designations, leave types, holidays).
 // Every create / update / delete is written to the audit log with before and after.
@@ -20,6 +22,19 @@ async function ensureNotInUse(modelName, entity, doc) {
   }
 }
 
+const DEFAULT_DEPARTMENTS = ['Engineering', 'Information Technology', 'Human Resources', 'Finance', 'Marketing', 'Sales', 'Operations', 'Administration', 'Customer Support']
+const DEFAULT_DESIGNATIONS = ['Software Engineer', 'Frontend Developer', 'Backend Developer', 'Full Stack Developer', 'IT Support Engineer', 'Network Administrator', 'Cyber Security Analyst', 'HR Manager', 'Accountant', 'Marketing Executive', 'Sales Executive', 'Project Manager', 'System Administrator', 'Business Analyst', 'QA Engineer']
+
+async function seedEmptySetupList(Model) {
+  // Only seed a list when it is completely empty; never overwrite user-created records.
+  if (await Model.estimatedDocumentCount() !== 0) return
+  if (Model.modelName === 'Department') {
+    await Model.insertMany(DEFAULT_DEPARTMENTS.map((name) => ({ name })), { ordered: false }).catch(() => {})
+  } else if (Model.modelName === 'Designation') {
+    await Model.insertMany(DEFAULT_DESIGNATIONS.map((name) => ({ name })), { ordered: false }).catch(() => {})
+  }
+}
+
 export function makeCrudService({ Model, entity, sort, checkRefs = async () => {} }) {
   const find = async (id) => {
     const doc = await Model.findById(id)
@@ -28,7 +43,10 @@ export function makeCrudService({ Model, entity, sort, checkRefs = async () => {
   }
 
   return {
-    list: () => Model.find().sort(sort),
+    list: async () => {
+      await seedEmptySetupList(Model)
+      return Model.find().sort(sort)
+    },
 
     async create(actor, data) {
       await checkRefs(data)
